@@ -1,0 +1,74 @@
+# --- Entorno Virtual ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Configuración y Secretos ---
+.env
+.secrets
+*.local
+
+# --- Logs y Datos ---
+*.log
+telemetry_data/
+*.tlog
+*.rlog
+
+# --- Editores y Sistema ---
+#.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- DroneKit / MAVLink específicos ---
+# Si generas archivos de misión o parámetros
+*.waypoints
+*.param.env
+.env.*
+.venv/
+.venv-win/
+__pycache__/
+*.pyc
+*.log
+*.tlog
+build/
+dist/
+dist_*/
+releases/
+*.exe
+*.zip
+*.pem
+*.key
+*.pfx
+.github/
+.vscode/
+*.bak
+*.backup
+*.backup.*
+*.before-*
+*.video-backup

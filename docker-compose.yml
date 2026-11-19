@@ -1,0 +1,19 @@
+services:
+  safeflight:
+    build: .
+    container_name: safeflight_app
+    restart: unless-stopped
+    ports:
+      - "8550:8550"           # Web UI
+      - "14560:14560/udp"     # MAVLink ArduPilot
+      - "5004:5004/udp"       # Stream RTP vídeo, el exterior hauria de ser 5600
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - OPENCV_FFMPEG_CAPTURE_OPTIONS=protocol_whitelist;file,rtp,udp,tcp|fflags;nobuffer|flags;low_delay|strict;-2|stimeout;3000000
+      - FLET_SECRET_KEY=${FLET_SECRET_KEY:?FLET_SECRET_KEY is required}
+    network_mode: bridge
+    volumes:
+      - ./assets:/app/assets  # assets externos sin rebuild

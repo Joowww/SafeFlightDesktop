@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+*.log
+.env
+main_production.py
+main.py
+App_tkinter.py
+
