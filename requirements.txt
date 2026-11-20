@@ -14,6 +14,9 @@ uvicorn==0.41.0
 numpy==2.4.2
 matplotlib==3.10.8
 opencv-python==4.13.0.92
+# Video reception (RTP/SDP and RTSP) with bundled FFmpeg; required by App_flet.py
+av==19.0.2
+pillow==13.0.0
 
 # MAV / drones
 dronekit==2.9.2

@@ -1,9 +1,11 @@
 from dronekit import connect
 
 class DroneConnection: 
-    def __init__(self, connection_string, baud_rate = 57600):
+    def __init__(self, connection_string, baud_rate=57600, heartbeat_timeout=30, timeout=90):
         self.connection_string = connection_string
         self.baud_rate = baud_rate
+        self.heartbeat_timeout = heartbeat_timeout
+        self.timeout = timeout
         self.vehicle = None
         self.is_connected = False
     def connect(self):
@@ -16,9 +18,9 @@ class DroneConnection:
             self.vehicle = connect(
                 self.connection_string, 
                 baud=self.baud_rate, 
-                wait_ready=False, 
-                heartbeat_timeout=30, 
-                timeout=90
+                wait_ready=False,
+                heartbeat_timeout=self.heartbeat_timeout,
+                timeout=self.timeout,
             )
             
             if self.vehicle:

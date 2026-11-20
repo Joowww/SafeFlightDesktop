@@ -27,12 +27,18 @@ class DroneManager:
         self.selected_control_mode = self.CONTROL_TRAJECTORY
         self.home_location = None
 
-    def setup_drone(self, mode="SIM", ):
-        print(f"DEBUG ENV_MODE={os.getenv('ENV_MODE')}")
-        print(f"DEBUG SIM_conn_str={os.getenv('SIM_conn_str')}")
-        print(f"DEBUG REAL_conn_str={os.getenv('REAL_conn_str')}")
+    def setup_drone(self, mode="SIM", connection_string=None, baud_rate=57600,
+                    heartbeat_timeout=30, connect_timeout=90):
+        """Open the MAVLink link.
 
-        if mode == "SIM":
+        ``connection_string`` comes from the active connection profile.
+        When it is omitted (CLI scripts ``main.py`` / ``main_production.py``)
+        the historical behaviour is kept: ``SIM_conn_str`` / ``REAL_conn_str``
+        environment variables or ``udpin:0.0.0.0:14560``.
+        """
+        if connection_string:
+            conn_str = connection_string
+        elif mode == "SIM":
             conn_str = os.getenv("SIM_conn_str") or "udpin:0.0.0.0:14560"
             print(f"DEBUG: Usando conexión SIM: {conn_str}")
         elif mode == "REAL":
@@ -40,7 +46,12 @@ class DroneManager:
         else:
             print(f"ERROR: Modo desconocido '{mode}'. Usa 'SIM' o 'REAL'.")
             return False
-        self.link = DroneConnection(conn_str)
+        self.link = DroneConnection(
+            conn_str,
+            baud_rate=baud_rate,
+            heartbeat_timeout=heartbeat_timeout,
+            timeout=connect_timeout,
+        )
         print(f"DEBUG mode={mode}")
         print(f"DEBUG conn_str efectivo={conn_str}")
         if self.link.connect():

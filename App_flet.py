@@ -37,6 +37,15 @@ from dronekit import VehicleMode
 
 from models.DroneManager import DroneManager
 from models.Trajectory import Trajectory
+from models.AppPaths import resource_dir, user_config_dir
+from models.AppLogging import active_log_path, start_session_log
+from models.ConnectionProfiles import (
+    ConnectionProfile,
+    ProfileStore,
+    redact_url,
+    write_runtime_sdp,
+)
+from ui.ConnectionProfilesPanel import ConnectionProfilesPanel
 import argparse
 
 
@@ -47,12 +56,31 @@ _g_video_thread_running = False
 _g_video_thread = None
 _g_video_frame_times = collections.deque(maxlen=120)
 _g_video_last_frame_at = None
+# Video source shared by the receiver thread. Changing the generation makes
+# the receiver drop the current stream and open the new source.
+_g_stream_sdp = None
+_g_stream_generation = 0
+_g_rtsp_transport = "tcp"
+_g_video_reconnect_s = 1.0
 
+
+def _set_global_video_source(source, rtsp_transport="tcp", reconnect_s=1.0):
+    """Publish a new video source (SDP path, RTSP URL or None)."""
+    global _g_stream_sdp, _g_stream_generation, _g_rtsp_transport, _g_video_reconnect_s
+    global _g_latest_frame, _g_video_last_frame_at
+    with _g_frame_lock:
+        _g_stream_sdp = source
+        _g_rtsp_transport = rtsp_transport if rtsp_transport in ("tcp", "udp") else "tcp"
+        _g_video_reconnect_s = max(0.2, float(reconnect_s))
+        _g_stream_generation += 1
+        _g_latest_frame = None
+        _g_video_last_frame_at = None
+        _g_video_frame_times.clear()
 
 
 def _global_video_worker():
     global _g_latest_frame, _g_video_thread_running
-    global _g_stream_sdp, _g_video_last_frame_at    
+    global _g_stream_sdp, _g_video_last_frame_at
 
     print("[GLOBAL VIDEO] Iniciando receptor PyAV...", flush=True)
 
@@ -61,18 +89,27 @@ def _global_video_worker():
     }
 
     while _g_video_thread_running:
-        if not _g_stream_sdp:
-            time.sleep(1)
+        with _g_frame_lock:
+            source = _g_stream_sdp
+            generation = _g_stream_generation
+            rtsp_transport = _g_rtsp_transport
+            reconnect_s = _g_video_reconnect_s
+        if not source:
+            time.sleep(0.5)
             continue
 
         try:
-            is_rtsp = _g_stream_sdp.startswith("rtsp://")
-            source_type = "RTSP/TCP" if is_rtsp else "RTP/UDP"
-            print(f"[GLOBAL VIDEO] Esperando señal {source_type}...", flush=True)
-            source_options = {"rtsp_transport": "tcp"} if is_rtsp else options
+            is_rtsp = source.startswith(("rtsp://", "rtsps://"))
+            source_type = f"RTSP/{rtsp_transport.upper()}" if is_rtsp else "RTP/UDP"
+            print(
+                f"[GLOBAL VIDEO] Esperando señal {source_type} "
+                f"({redact_url(source) if is_rtsp else source})...",
+                flush=True,
+            )
+            source_options = {"rtsp_transport": rtsp_transport} if is_rtsp else options
 
             with av.open(
-                _g_stream_sdp,
+                source,
                 mode="r",
                 format="rtsp" if is_rtsp else "sdp",
                 options=source_options,
@@ -84,11 +121,16 @@ def _global_video_worker():
                 for decoded_frame in container.decode(video=0):
                     if not _g_video_thread_running:
                         break
+                    if generation != _g_stream_generation:
+                        print("[GLOBAL VIDEO] Fuente cambiada; reabriendo.", flush=True)
+                        break
 
                     frame = decoded_frame.to_ndarray(format="bgr24")
                     received_at = time.monotonic()
 
                     with _g_frame_lock:
+                        if generation != _g_stream_generation:
+                            break
                         _g_latest_frame = frame
                         _g_video_last_frame_at = received_at
                         _g_video_frame_times.append(received_at)
@@ -101,7 +143,7 @@ def _global_video_worker():
                         )
                         first_frame_received = True
 
-                if _g_video_thread_running:
+                if _g_video_thread_running and generation == _g_stream_generation:
                     print(
                         "[GLOBAL VIDEO] Flujo interrumpido.",
                         flush=True,
@@ -115,8 +157,8 @@ def _global_video_worker():
                     flush=True,
                 )
 
-        if _g_video_thread_running:
-            time.sleep(1)
+        if _g_video_thread_running and generation == _g_stream_generation:
+            time.sleep(reconnect_s)
 
     print("[GLOBAL VIDEO] Receptor detenido.", flush=True)
 
@@ -217,25 +259,27 @@ class SafeFlightApp:
         # ----------------------------------------------------
         # RECURSOS
         # ----------------------------------------------------
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.base_dir = str(resource_dir())
         self.assets_dir = os.path.join(self.base_dir, "assets")
         self.icon_path = os.path.join(self.assets_dir, "drone_icon.png")
 
-        # La configuración del vídeo pertenece al usuario, no al ejecutable.
-        # Esto también funciona con la distribución PyInstaller --onedir.
-        self.video_config_dir = os.path.join(
-            os.environ.get("APPDATA") or os.path.expanduser("~"),
-            "SafeFlightDesktop",
-        )
-        self.video_config_path = os.path.join(
-            self.video_config_dir, "video_settings.json"
-        )
-        self.video_udp_port = self._load_video_udp_port()
-        self.video_mode, self.rtsp_url = self._load_video_stream_mode()
-        self.stream_sdp = (
-            self.rtsp_url
-            if self.video_mode == "rtsp"
-            else self._prepare_runtime_sdp(self.video_udp_port)
+        # La configuración pertenece al usuario, no al ejecutable:
+        # %APPDATA% (Windows), ~/Library/Application Support (macOS)
+        # o ~/.config (Linux). Ver models/AppPaths.py.
+        self.video_config_dir = str(user_config_dir())
+
+        # Perfiles de conexión (SIYI / 5G-VPN / SITL / personalizados).
+        self.profile_store = ProfileStore().load()
+        for warning in self.profile_store.warnings:
+            print(f"[PROFILES] {warning}")
+        self.active_profile = self.profile_store.active
+        self.connected_profile_id = None
+        self.stream_sdp = self._stream_source_for(self.active_profile)
+        print(
+            f"[PROFILES] Perfil activo: {self.active_profile.name} | "
+            f"MAVLink {self.active_profile.mavlink_connection_string()} | "
+            f"Vídeo {self.active_profile.video_summary()} | "
+            f"Archivo {self.profile_store.path}"
         )
 
         try:
@@ -456,13 +500,29 @@ class SafeFlightApp:
     # UI BUILDERS
     # ========================================================
     def _build_sidebar(self):
+        self.profile_dropdown = ft.Dropdown(
+            label="Perfil de conexión",
+            value=self.active_profile.id,
+            dense=True,
+            options=self._profile_options(),
+            on_select=self._on_profile_selected,
+        )
         self.conn_entry = ft.TextField(
-            value="udpin:0.0.0.0:14560",
-            read_only= True if self.page.web else False,
+            label="MAVLink",
+            value=self.active_profile.mavlink_connection_string(),
+            read_only=True,
             dense=True,
             border_radius=10,
             bgcolor="#1b1b1b",
             color="white",
+        )
+        self.btn_edit_profiles = ft.TextButton(
+            "Editar perfiles…",
+            on_click=self._open_profiles_panel,
+            disabled=bool(self.page.web),
+        )
+        self.link_status_text = ft.Text(
+            "MAVLink: sin conexión", size=12, color="#aaaaaa"
         )
 
         self.speed_value_text = ft.Text("1.0 m/s", color="#3b8ed0", size=13)
@@ -569,41 +629,17 @@ class SafeFlightApp:
             on_change=self._on_vr_switch_change,
         )
 
-        self.video_port_field = ft.TextField(
-            label="Puerto RTP local (UDP)",
-            value=str(self.video_udp_port),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            dense=True,
-            max_length=5,
-            border_radius=10,
-            bgcolor="#1b1b1b",
-            color="white",
-        )
-        self.video_use_rtsp_switch = ft.Switch(
-            label="Usar RTSP (MK32 / MediaMTX)",
-            value=(self.video_mode == "rtsp"),
-        )
-        self.video_rtsp_url_field = ft.TextField(
-            label="URL RTSP (servidor en Raspberry)",
-            value=self.rtsp_url,
-            dense=True,
-            border_radius=10,
-            bgcolor="#1b1b1b",
-            color="white",
-        )
-        self.video_port_save_button = ft.Button(
-            "Guardar vídeo (reiniciar)",
-            on_click=self._save_video_port_setting,
-        )
-        current_video_source = (
-            "RTSP: " + self.rtsp_url
-            if self.video_mode == "rtsp"
-            else f"RTP/UDP: {self.video_udp_port}"
-        )
         self.video_port_info_text = ft.Text(
-            f"Fuente en uso: {current_video_source}. Cambios al reiniciar.",
+            f"Fuente en uso: {self.active_profile.video_summary()}",
             color="#aaaaaa",
             size=11,
+        )
+        log_path = active_log_path()
+        self.log_path_text = ft.Text(
+            f"Log: {log_path}" if log_path else "Log: solo consola",
+            color="#777777",
+            size=10,
+            selectable=True,
         )
 
         self.sidebar = ft.Container(
@@ -615,8 +651,11 @@ class SafeFlightApp:
                 spacing=10,
                 controls=[
                     ft.Text("SAFEFLIGHT", size=22, weight=ft.FontWeight.BOLD),
+                    self.profile_dropdown,
                     self.conn_entry,
+                    self.btn_edit_profiles,
                     self.btn_connect,
+                    self.link_status_text,
                     ft.Divider(color="#333333"),
                     ft.Text(
                         "MISSION SETTINGS",
@@ -668,11 +707,13 @@ class SafeFlightApp:
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
-                    self.video_use_rtsp_switch,
-                    self.video_port_field,
-                    self.video_rtsp_url_field,
-                    self.video_port_save_button,
                     self.video_port_info_text,
+                    ft.Text(
+                        "La fuente de vídeo se edita en el perfil y se aplica al guardar.",
+                        color="#777777",
+                        size=10,
+                    ),
+                    self.log_path_text,
                 ],
             ),
         )
@@ -976,10 +1017,18 @@ class SafeFlightApp:
             ],
         )
 
+        self.profiles_panel = ConnectionProfilesPanel(
+            store=self.profile_store,
+            on_saved=self._on_profile_saved,
+            on_message=lambda msg, err: self._show_message(msg, error=err),
+            on_update=self._safe_page_update,
+        )
+
         self.root = ft.Stack(
             expand=True,
             controls=[
                 self.root_content,   # ← solo esto, sin el kb_listener aquí
+                self.profiles_panel.container,
             ],
         )
 
@@ -994,8 +1043,12 @@ class SafeFlightApp:
         self._shutdown_done = False
         self._kb_thread_running = True
 
-        global _g_stream_sdp, _g_video_thread_running, _g_video_thread
-        _g_stream_sdp = self.stream_sdp
+        global _g_video_thread_running, _g_video_thread
+        _set_global_video_source(
+            self.stream_sdp,
+            self.active_profile.video.rtsp_transport,
+            self.active_profile.timeouts.video_reconnect_interval_s,
+        )
         if not _g_video_thread_running:
             _g_video_thread_running = True
             _g_video_thread = threading.Thread(target=_global_video_worker, daemon=True)
@@ -1159,124 +1212,100 @@ class SafeFlightApp:
         self.vr_enabled = bool(e.control.value)
 
     # ========================================================
-    # VIDEO CONFIGURATION (WINDOWS DESKTOP)
+    # CONNECTION PROFILES / VIDEO SOURCE
     # ========================================================
-    def _load_video_udp_port(self) -> int:
-        """Carga el puerto RTP desde la configuración del usuario."""
-        default_port = 5004
-        try:
-            with open(self.video_config_path, "r", encoding="utf-8") as config_file:
-                settings = json.load(config_file)
-            port = int(settings.get("rtp_udp_port", default_port))
-            if 1024 <= port <= 65534:
-                return port
-            print("[VIDEO CONFIG] Puerto fuera de rango; usando 5004.")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            print(f"[VIDEO CONFIG] No se pudo leer configuración: {exc}")
-        return default_port
+    def _profile_options(self):
+        return [
+            ft.DropdownOption(key=p.id, text=p.name)
+            for p in self.profile_store.profiles
+        ]
 
-    def _load_video_stream_mode(self) -> tuple[str, str]:
-        """Carga el tipo de fuente sin alterar la configuración RTP previa."""
-        default_url = "rtsp://192.168.144.30:8554/raspicam"
+    def _stream_source_for(self, profile: ConnectionProfile):
+        """Devuelve la fuente para PyAV: URL RTSP, ruta SDP o None."""
+        video = profile.video
+        if video.mode == "rtsp":
+            return video.rtsp_url
+        if video.mode == "none":
+            return None
         try:
-            with open(self.video_config_path, "r", encoding="utf-8") as handle:
-                settings = json.load(handle)
-            mode = settings.get("video_mode", "rtp")
-            url = settings.get("rtsp_url", default_url)
-            if mode not in ("rtp", "rtsp"):
-                mode = "rtp"
-            if not isinstance(url, str) or not self._valid_rtsp_url(url):
-                url = default_url
-            return mode, url
-        except FileNotFoundError:
-            return "rtp", default_url
-        except Exception as exc:
-            print(f"[VIDEO CONFIG] No se pudo leer modo: {exc}")
-            return "rtp", default_url
-
-    @staticmethod
-    def _valid_rtsp_url(url: str) -> bool:
-        if not isinstance(url, str) or len(url) > 1024:
-            return False
-        try:
-            parts = urlsplit(url.strip())
-            return (
-                parts.scheme == "rtsp"
-                and bool(parts.hostname)
-                and (parts.port is None or 1 <= parts.port <= 65535)
-                and not any(c in url for c in ("\n", "\r", "\t"))
-            )
-        except ValueError:
-            return False
-
-    def _prepare_runtime_sdp(self, port: int) -> str:
-        """Escribe un SDP reproducible en AppData, no en la carpeta de la app."""
-        sdp_path = os.path.join(self.video_config_dir, "stream_runtime.sdp")
-        sdp_text = (
-            "v=0\n"
-            "o=- 0 0 IN IP4 0.0.0.0\n"
-            "s=SafeFlight Desktop RTP receiver\n"
-            "c=IN IP4 0.0.0.0\n"
-            "t=0 0\n"
-            "a=tool:SafeFlightDesktop\n"
-            f"m=video {port} RTP/AVP 96\n"
-            "a=rtpmap:96 H264/90000\n"
-            "a=fmtp:96 packetization-mode=1\n"
-            "a=recvonly\n"
-        )
-        try:
-            os.makedirs(self.video_config_dir, exist_ok=True)
-            with open(sdp_path, "w", encoding="ascii", newline="\n") as sdp_file:
-                sdp_file.write(sdp_text)
-            print(f"[VIDEO CONFIG] Escuchando RTP en UDP {port}")
-            return sdp_path
-        except OSError as exc:
+            return str(write_runtime_sdp(self.video_config_dir, video.rtp_udp_port))
+        except (OSError, ValueError) as exc:
             # No se intenta modificar el stream.sdp empaquetado.
-            print(f"[VIDEO CONFIG] No se pudo crear SDP en AppData: {exc}")
-            self.video_udp_port = 5004
+            print(f"[VIDEO CONFIG] No se pudo crear el SDP de usuario: {exc}")
             return os.path.join(self.base_dir, "stream.sdp")
 
-    def _save_video_port_setting(self, e=None):
-        """Guarda RTP o RTSP en AppData y pide reiniciar para aplicar cambios."""
+    def _apply_video_source(self, profile: ConnectionProfile):
+        self.stream_sdp = self._stream_source_for(profile)
+        _set_global_video_source(
+            self.stream_sdp,
+            profile.video.rtsp_transport,
+            profile.timeouts.video_reconnect_interval_s,
+        )
+        self.video_port_info_text.value = (
+            f"Fuente en uso: {profile.video_summary()}"
+        )
+        print(f"[VIDEO CONFIG] Fuente aplicada: {profile.video_summary()}")
+
+    def _mavlink_session_active(self) -> bool:
+        dm = self.drone_manager
+        return bool(dm and dm.link and dm.link.is_connected)
+
+    def _activate_profile(self, profile: ConnectionProfile):
+        """Aplica el perfil: vídeo inmediato; MAVLink en la próxima conexión."""
+        self.active_profile = profile
+        self.profile_dropdown.options = self._profile_options()
+        self.profile_dropdown.value = profile.id
+        self.conn_entry.value = profile.mavlink_connection_string()
+        self._apply_video_source(profile)
+        if (
+            self._mavlink_session_active()
+            and self.connected_profile_id is not None
+            and self.connected_profile_id != profile.id
+        ):
+            self._show_message(
+                "Vídeo actualizado. La sesión MAVLink actual se mantiene; "
+                "el nuevo endpoint se usará al reiniciar SafeFlight.",
+            )
+        self._safe_page_update()
+
+    def _on_profile_selected(self, e=None):
         if self.closing:
             return
-        raw = str(self.video_port_field.value or "").strip()
+        profile_id = str(self.profile_dropdown.value or "")
         try:
-            port = int(raw)
-        except ValueError:
-            self._show_message("Introduce un puerto UDP numérico.", error=True)
+            profile = self.profile_store.select(profile_id)
+            self.profile_store.save()
+        except (KeyError, OSError) as exc:
+            self._show_message(f"No se pudo seleccionar el perfil: {exc}", error=True)
             return
-        if not 1024 <= port <= 65534:
-            self._show_message("Puerto RTP fuera de rango (1024-65534).", error=True)
-            return
+        self._activate_profile(profile)
 
-        mode = "rtsp" if self.video_use_rtsp_switch.value else "rtp"
-        url = str(self.video_rtsp_url_field.value or "").strip()
-        if not self._valid_rtsp_url(url):
-            self._show_message("URL RTSP inválida; usa rtsp://IP:PUERTO/ruta.", error=True)
+    def _open_profiles_panel(self, e=None):
+        if self.closing:
             return
+        self._clear_keyboard_state()
+        self.profiles_panel.open(self.active_profile.id)
 
-        settings = {
-            "video_mode": mode,
-            "rtp_udp_port": port,
-            "rtsp_url": url,
-        }
+    def _on_profile_saved(self, profile: ConnectionProfile):
+        self._activate_profile(self.profile_store.active)
+        self._show_message(f"Perfil '{profile.name}' guardado y seleccionado.")
+
+    def _update_link_status(self, vehicle):
+        """Muestra el tiempo desde el último HEARTBEAT recibido."""
         try:
-            os.makedirs(self.video_config_dir, exist_ok=True)
-            temporary_path = self.video_config_path + ".tmp"
-            with open(temporary_path, "w", encoding="utf-8") as config_file:
-                json.dump(settings, config_file, indent=2)
-            os.replace(temporary_path, self.video_config_path)
-        except OSError as exc:
-            self._show_message(f"No se pudo guardar el vídeo: {exc}", error=True)
-            return
-
-        source = f"RTSP {url}" if mode == "rtsp" else f"RTP UDP {port}"
-        message = f"Guardado: {source}. Reinicia SafeFlight para aplicarlo."
-        print(f"[VIDEO CONFIG] {message}")
-        self._show_message(message)
+            age = vehicle.last_heartbeat if vehicle is not None else None
+        except Exception:
+            age = None
+        stale_after = self.active_profile.timeouts.telemetry_stale_s
+        if age is None:
+            text, color = "MAVLink: sin heartbeat", "#aaaaaa"
+        elif age <= stale_after:
+            text, color = f"MAVLink: OK · último heartbeat {age:.1f} s", "#4ade80"
+        else:
+            text, color = f"MAVLink: TELEMETRÍA OBSOLETA · {age:.1f} s", "#fb7185"
+        if self.link_status_text.value != text:
+            self.link_status_text.value = text
+            self.link_status_text.color = color
 
     # ========================================================
     # VIDEO
@@ -1698,6 +1727,7 @@ class SafeFlightApp:
                             self.btn_land.disabled = False
                             self.btn_land.text = "LAND"
 
+                    self._update_link_status(vehicle)
                     status_text = f"MODE: {vehicle.mode.name}\nARMED: {vehicle.armed}"
                     self.lbl_status.value = status_text
                     self.lbl_status.color = "#2ecc71" if vehicle.armed else "#e74c3c"
@@ -2021,41 +2051,44 @@ class SafeFlightApp:
         self.btn_connect.disabled = True
         self._safe_page_update()
 
-        conn_str = "udpin:0.0.0.0:14560" #if os.getenv('ENV_MODE', 'dev') == 'dev' else "host.docker.internal:14560"
-        
+        # El endpoint MAVLink procede del perfil activo (editable sin recompilar).
+        profile = self.active_profile
+        conn_str = profile.mavlink_connection_string()
+        self.profile_dropdown.disabled = True
+        self._safe_page_update()
+
         self.connection_stop_event.clear()
         self.connection_thread = threading.Thread(
             target=self._connection_worker,
-            args=(conn_str,),
+            args=(conn_str, profile),
             name="connection-worker",
             daemon=False,
         )
         self.connection_thread.start()
 
-    def _connection_worker(self, conn_string):  
-        #os.environ["SIM_conn_str"] = "udpin:0.0.0.0:14560"  
-        #os.environ["REAL_conn_str"] = "host.docker.internal:14560"  
-        print(f"DEBUG ENV_MODE={os.getenv('ENV_MODE')}")
-        print(f"DEBUG SIM_conn_str={os.getenv('SIM_conn_str')}")
-        print(f"DEBUG REAL_conn_str={os.getenv('REAL_conn_str')}")
-        print(f"DEBUG conn_str efectivo={conn_string}")
+    def _connection_worker(self, conn_string, profile: ConnectionProfile):
+        print(
+            f"[PROFILES] Conectando con perfil '{profile.name}' ({profile.kind}): "
+            f"{conn_string}"
+        )
 
         try:
             if self.closing or self.connection_stop_event.is_set():
                 return
-            env_mode = os.getenv('ENV_MODE', 'dev').lower()
-            mode = "REAL" if env_mode == 'prod' else "SIM"
-            print(f"DEBUG: Modo {env_mode}, usando {mode}: {conn_string}")
-            
-            if self.closing or self.connection_stop_event.is_set():
-                return
-            
+
             if self.drone_manager.link and self.drone_manager.link.is_connected and self.drone_manager.health.is_alive:
                 print("DEBUG: La conexión global ya está establecida.")
                 self._safe_run_task(self._apply_connection_success)
                 return
 
-            if self.drone_manager.setup_drone(mode=mode):
+            connected = self.drone_manager.setup_drone(
+                connection_string=conn_string,
+                baud_rate=profile.mavlink.baud_rate,
+                heartbeat_timeout=profile.timeouts.heartbeat_timeout_s,
+                connect_timeout=profile.timeouts.connect_timeout_s,
+            )
+            if connected:
+                self.connected_profile_id = profile.id
                 self._safe_run_task(self._apply_connection_success)
             else:
                 self._safe_run_task(
@@ -2338,6 +2371,9 @@ class SafeFlightApp:
         self.btn_connect.text = "CONNECTAR"
         self.btn_connect.disabled = False
         self.btn_connect.bgcolor = "#28a745"
+        self.profile_dropdown.disabled = False
+        self.link_status_text.value = "MAVLink: error de conexión"
+        self.link_status_text.color = "#fb7185"
         self._safe_page_update()
         self._show_message(message, error=True)
         print(f"DEBUG: {message}")
@@ -2385,7 +2421,9 @@ class SafeFlightApp:
         # 2) detener componentes del drone manager
         try:
             if getattr(self.drone_manager, "health", None):
-                self.drone_manager.health._stop_event().set()
+                # Detiene el monitor para que el cierre de la interfaz no
+                # dispare el callback de pérdida de enlace (sin comandos).
+                self.drone_manager.health.stop()
         except Exception as e:
             print(f"Error health.stop(): {e}")
 
@@ -2453,11 +2491,9 @@ class SafeFlightApp:
                     print ("Error cerrando vehicle:", sys.exc_info())
                     pass
 
-                try:
-                    dm.link.close()
-                except Exception:
-                    print ("Error cerrando link:", sys.exc_info())
-                    pass
+                # DroneConnection has no close(); the vehicle was closed above.
+                dm.link.vehicle = None
+                dm.link.is_connected = False
         except Exception:
             print ("Error limpiando link:", sys.exc_info())
             pass
@@ -2669,10 +2705,86 @@ class SafeFlightApp:
 
 
 def main(page: ft.Page):
-    
+
     SafeFlightApp(page)
 
 
+def run_self_check() -> int:
+    """Non-interactive check used by build.py and CI on packaged builds.
+
+    Verifies that the bundled resources, the native video stack and the
+    profile store work on this platform without opening the GUI and
+    without opening any network connection.
+    """
+    import platform
+    import tempfile
+
+    report = {
+        "app": "SafeFlight Desktop",
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "checks": {},
+    }
+    ok = True
+
+    def check(name, func):
+        nonlocal ok
+        try:
+            report["checks"][name] = {"ok": True, "detail": func()}
+        except Exception as exc:  # report every failure, do not stop early
+            ok = False
+            report["checks"][name] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+    res = resource_dir()
+
+    def require_file(path):
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        return str(path)
+
+    def pyav_h264():
+        if "h264" not in av.codecs_available:
+            raise RuntimeError("H.264 decoder not available in PyAV build")
+        return f"av {av.__version__}, h264 decoder available"
+
+    check("assets", lambda: require_file(res / "assets" / "drone_icon.png"))
+    check("stream_sdp_template", lambda: require_file(res / "stream.sdp"))
+    check("pyav", pyav_h264)
+    def mavlink_dialects():
+        import importlib
+        for name in ("pymavlink.dialects.v10.ardupilotmega", "pymavlink.dialects.v20.ardupilotmega"):
+            importlib.import_module(name)
+        return "MAVLink 1 and MAVLink 2 ardupilotmega dialects available"
+
+    check("opencv", lambda: cv2.__version__)
+    check("mavlink_dialects", mavlink_dialects)
+    check("flet", lambda: ft.__version__ if hasattr(ft, "__version__") else "imported")
+
+    def profiles_roundtrip():
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProfileStore(config_dir=tmp, environ={}).load()
+            store.save()
+            again = ProfileStore(config_dir=tmp, environ={}).load()
+            return [p.id for p in again.profiles]
+    check("profile_store", profiles_roundtrip)
+    check("user_config_dir", lambda: str(user_config_dir()))
+
+    report["ok"] = ok
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    if "--self-check-output" in sys.argv:
+        index = sys.argv.index("--self-check-output") + 1
+        if index < len(sys.argv):
+            with open(sys.argv[index], "w", encoding="utf-8") as handle:
+                handle.write(text + "\n")
+    print(text)
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        sys.exit(run_self_check())
+    start_session_log()
     ft.context.disable_auto_update()
     ft.run(main)
