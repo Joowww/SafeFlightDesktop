@@ -1,0 +1,3 @@
+# Build and test tooling for SafeFlight Desktop (not needed to run from source)
+pyinstaller==6.22.3
+pytest==8.4.2

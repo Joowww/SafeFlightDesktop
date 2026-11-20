@@ -1,0 +1,104 @@
+name: Desktop build
+
+# Builds SafeFlight Desktop natively on each operating system (PyInstaller
+# cannot cross-compile) by running the same entry point used locally:
+# `python build.py`, which runs the tests, packages the app, smoke-tests the
+# packaged executable and writes a build report.
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths:
+      - "App_flet.py"
+      - "models/**"
+      - "ui/**"
+      - "assets/**"
+      - "stream.sdp"
+      - "VERSION"
+      - "requirements*.txt"
+      - "build.py"
+      - "pytest.ini"
+      - "packaging/desktop/**"
+      - "tests/desktop/**"
+      - "shared/**"
+      - "scripts/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "App_flet.py"
+      - "models/**"
+      - "ui/**"
+      - "assets/**"
+      - "stream.sdp"
+      - "VERSION"
+      - "requirements*.txt"
+      - "build.py"
+      - "pytest.ini"
+      - "packaging/desktop/**"
+      - "tests/desktop/**"
+      - "shared/**"
+      - "scripts/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-2025
+          - name: linux-x64
+            os: ubuntu-24.04
+          - name: macos-arm64
+            os: macos-15
+          - name: macos-x64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # Ubuntu 24.04 package names (t64 ABI transition); verified in an ubuntu:24.04 container.
+          sudo apt-get install -y --no-install-recommends libgl1 libgles2 libegl1 libglib2.0-0t64 libgtk-3-0t64 libmpv2 libsecret-1-0 \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0
+
+      - name: RTSP test server (Linux only, enables the RTSP receiver test)
+        if: runner.os == 'Linux'
+        run: docker compose -f scripts/rtsp-test-server/docker-compose.yml up -d
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Build, test and package
+        run: python build.py --target desktop
+
+      - name: Upload package and build report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: SafeFlightDesktop-${{ matrix.name }}
+          path: dist/artifacts/*
+          if-no-files-found: warn
+          retention-days: 30
