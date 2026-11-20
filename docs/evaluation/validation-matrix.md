@@ -13,6 +13,17 @@ de [test-log.md](test-log.md). No se ha rellenado ninguna celda por suposición.
 | FAILED | Ejecutado con resultado incorrecto |
 | NOT_APPLICABLE | No aplica |
 
+Correspondencia con la terminología de la memoria del TFG:
+
+| Término | Criterio |
+|---|---|
+| VERIFICADO EN WINDOWS | VERIFIED en la columna Windows (ejecutable empaquetado y su interfaz) |
+| VERIFICADO EN LINUX | VERIFIED en la columna Linux (contenedor Ubuntu 24.04, compilación y arranque) |
+| VERIFICADO EN ANDROID EMULADO | VERIFIED en emulador API 36 y/o API 28 |
+| COMPILADO EN CI | El workflow de GitHub Actions de esa plataforma terminó correctamente; no implica validación funcional |
+| PENDIENTE DE VALIDACIÓN FÍSICA | BLOCKED: requiere dron, Raspberry, enlace SIYI o MK32 |
+| DISEÑADO | Especificado sin implementar (p. ej. integración con el supervisor, [integration-points.md](../architecture/integration-points.md)) |
+
 ## 1. Matriz principal
 
 | Funcionalidad | Windows | macOS | Linux | Android |

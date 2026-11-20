@@ -1,72 +1,141 @@
-# SafeFlight Desktop en macOS
+# SafeFlight Desktop en macOS — guía de prueba
 
-Guía para ejecutar y compilar SafeFlight Desktop en un Mac (Apple Silicon o Intel).
+Procedimiento para descargar, abrir y validar SafeFlight Desktop en un Mac
+(Apple Silicon o Intel) y para comunicar los resultados.
+
+> **Estado:** el paquete macOS se compila en GitHub Actions. **No está firmado ni
+> notarizado** y **no se ha validado todavía en un Mac real**: esta guía es esa validación.
+> Una compilación correcta en CI no garantiza que la interfaz y las conexiones funcionen.
 
 **Requisito: macOS 14 (Sonoma) o posterior.** Las dependencias nativas (`av` en Apple
 Silicon, `opencv-python` en Intel) solo publican binarios para macOS 14+.
 
-> Estado: el paquete macOS se generará en GitHub Actions tras el primer *push* autorizado. **No se ha validado todavía en
-> un Mac real**; las comprobaciones de la sección 5 son precisamente esa validación.
+## 1. Identificar el procesador del Mac
 
-## 1. Opción A: paquete compilado por CI
-
-1. En GitHub → *Actions* → **Desktop build** → última ejecución correcta.
-2. Descargar `SafeFlightDesktop-macos-arm64` (Apple Silicon, M1–M4) o
-   `SafeFlightDesktop-macos-x64` (Intel). En caso de duda: menú  → *Acerca de este Mac*.
-3. Descomprimir y mover `SafeFlightDesktop.app` a `Aplicaciones` (o usar el `.dmg`).
-4. Primer arranque: la app **no está firmada ni notarizada**. Gatekeeper la bloqueará.
-   * Clic derecho sobre la app → *Abrir* → *Abrir*, o bien
-   * *Ajustes del Sistema → Privacidad y seguridad → Abrir igualmente*.
-   * Alternativa en Terminal (solo para este paquete de confianza):
-     `xattr -dr com.apple.quarantine /Applications/SafeFlightDesktop.app`
-5. macOS 15+ preguntará por el acceso a la **red local**: hay que permitirlo para
-   recibir MAVLink y vídeo.
-
-## 2. Opción B: desde el código fuente
+Menú  → *Acerca de este Mac*: «Chip Apple M…» = **Apple Silicon**; «Procesador Intel» =
+**Intel**. Alternativa en Terminal:
 
 ```bash
-# Python 3.12 (python.org o Homebrew: brew install python@3.12)
-git clone https://github.com/Joowww/SafeFlightDesktop.git
+uname -m        # arm64 = Apple Silicon · x86_64 = Intel
+sw_vers -productVersion
+```
+
+## 2. Descargar el artefacto correcto
+
+1. Iniciar sesión en GitHub (necesario para descargar artefactos de Actions).
+2. Abrir *Actions* → **Desktop build** → la ejecución más reciente en verde de la rama
+   `feature/multiplatform-android`.
+3. En *Artifacts*, descargar:
+   * Apple Silicon: `SafeFlightDesktop-macos-arm64`
+   * Intel: `SafeFlightDesktop-macos-x64`
+4. Descomprimir la descarga. Contiene:
+   * `SafeFlightDesktop-<versión>-macos-<arch>.zip` (la aplicación),
+   * `SafeFlightDesktop-<versión>-macos-<arch>.dmg` (si se generó),
+   * `…build-report.json` (pruebas y SHA-256 de la compilación).
+5. Descomprimir el `.zip` interior con doble clic (o abrir el `.dmg`) y arrastrar
+   `SafeFlightDesktop.app` a **Aplicaciones**.
+
+Opcional, comprobar integridad: `shasum -a 256 SafeFlightDesktop-*.zip` debe coincidir con
+`sha256` del informe JSON.
+
+## 3. Primer arranque de una app no firmada (sin desactivar protecciones)
+
+macOS bloqueará la app porque no está firmada con un certificado de Apple Developer.
+Autorizar **solo esta aplicación**:
+
+* **macOS 15 o posterior:** abrir la app (aparecerá un aviso) → *Ajustes del Sistema →
+  Privacidad y seguridad* → al final, «Se ha bloqueado SafeFlightDesktop» → **Abrir igualmente**
+  → confirmar con la contraseña. En macOS 15 el *Ctrl‑clic → Abrir* ya no basta.
+* **macOS 14:** *Ctrl‑clic* sobre la app → *Abrir* → *Abrir*.
+* Si macOS indica «está dañada y no se puede abrir» (atributo de cuarentena de la descarga),
+  quitar la cuarentena **solo de esta app**:
+  `xattr -dr com.apple.quarantine /Applications/SafeFlightDesktop.app`
+
+**No** usar `sudo spctl --master-disable` ni desactivar Gatekeeper globalmente.
+
+Al primer arranque, macOS puede pedir:
+* **Red local** («SafeFlight recibe telemetría MAVLink y vídeo…»): **Permitir**. Sin este
+  permiso no llegan telemetría ni vídeo, sin otro aviso.
+* **Cortafuegos** (conexiones entrantes UDP): **Permitir**.
+
+## 4. Comprobación rápida de arranque
+
+```bash
+/Applications/SafeFlightDesktop.app/Contents/MacOS/SafeFlightDesktop --self-check
+```
+
+Debe terminar con `"ok": true` (recursos, decodificador H.264, dialectos MAVLink, Flet,
+perfiles). Después abrir la app normalmente: debe aparecer la ventana con mapa y HUD.
+
+## 5. Preparar las fuentes de prueba (sin dron)
+
+Las fuentes de prueba están en el repositorio. En otra ventana de Terminal:
+
+```bash
+git clone -b feature/multiplatform-android https://github.com/Joowww/SafeFlightDesktop.git
 cd SafeFlightDesktop
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt -r requirements-build.txt
-python App_flet.py --self-check     # debe terminar con "ok": true
-python App_flet.py                  # interfaz
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install pymavlink==2.4.49 av==19.0.2 numpy==2.4.2
 ```
 
-## 3. Compilar el `.app` localmente
+* **Telemetría MAVLink sintética** (ArduCopter simulado, nunca ejecuta comandos):
+  `python scripts/mavlink_test_sender.py --target 127.0.0.1:14560`
+* **Vídeo RTP/UDP** (como el enlace 5G actual): `python scripts/rtp_test_sender.py --port 5004`
+* **Vídeo RTSP**, una de estas opciones:
+  * Docker Desktop: `docker compose -f scripts/rtsp-test-server/docker-compose.yml up -d`
+    → `rtsp://127.0.0.1:18554/test`
+  * Homebrew: `brew install mediamtx ffmpeg`, ejecutar `mediamtx` y, en otra terminal,
+    `ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp rtsp://127.0.0.1:8554/test`
+    → `rtsp://127.0.0.1:8554/test`
 
-```bash
-python build.py
-```
+## 6. Lista de validación
 
-Genera `dist/artifacts/SafeFlightDesktop-<versión>-macos-<arm64|x64>.zip` (y `.dmg`).
-El paquete corresponde a la arquitectura del Mac que compila.
+Marcar cada punto y anotar resultado, versión de macOS y chip:
 
-## 4. Dónde están los datos
+- [ ] **V-1** La app abre tras autorizarla (sección 3) y muestra mapa y HUD.
+- [ ] **V-2** `--self-check` devuelve `"ok": true`.
+- [ ] **V-3** Panel lateral (botón ☰ abajo a la izquierda): perfil «SITL / SIMULACIÓN» y MAVLink `udpin:0.0.0.0:14560`.
+- [ ] **V-4** *Editar perfiles…* → *Nuevo* → nombre «Prueba Mac», puerto local `14571` → *Guardar y seleccionar*: el panel muestra `udpin:0.0.0.0:14571`.
+- [ ] **V-5** Cerrar y reabrir la app: sigue seleccionado «Prueba Mac».
+- [ ] **V-6** Con el generador en el puerto del perfil (`--target 127.0.0.1:14571`), pulsar **CONNECT**: «MAVLink: OK», HUD con `MODE: LOITER` y `SAT: 12`.
+- [ ] **V-7** Detener el generador (Ctrl+C) unos 5 s: «TELEMETRÍA OBSOLETA»; relanzarlo: vuelve «MAVLink: OK».
+- [ ] **V-8** Vídeo RTP: en el editor, puerto RTP del perfil `5004`, ejecutar `rtp_test_sender.py --port 5004`: indicador «CAMERA LIVE».
+- [ ] **V-9** Vídeo RTSP: en el editor, *Fuente de vídeo* → RTSP, URL de la sección 5 → *Guardar*: «CAMERA LIVE» sin reiniciar la app.
+- [ ] **V-10** Cerrar la ventana: la app termina (sin icono en el Dock ni proceso `SafeFlightDesktop` en *Monitor de Actividad*).
+
+No conectar con el dron real durante esta prueba.
+
+## 7. Recoger logs y comunicar errores
 
 | Elemento | Ruta |
 |---|---|
-| Perfiles de conexión | `~/Library/Application Support/SafeFlightDesktop/connection_profiles.json` |
-| Logs de sesión | `~/Library/Logs/SafeFlightDesktop/` |
+| Logs de sesión | `~/Library/Logs/SafeFlightDesktop/safeflight-*.log` |
+| Perfiles | `~/Library/Application Support/SafeFlightDesktop/connection_profiles.json` |
+| Informes de fallo de macOS | `~/Library/Logs/DiagnosticReports/` (ficheros `SafeFlightDesktop*` o `flet*`) |
 
-La ruta del log actual aparece al final del panel lateral.
+```bash
+cd ~/Desktop && mkdir -p safeflight-mac-report
+cp ~/Library/Logs/SafeFlightDesktop/*.log safeflight-mac-report/ 2>/dev/null
+cp ~/Library/Logs/DiagnosticReports/*{SafeFlight,flet}* safeflight-mac-report/ 2>/dev/null
+/Applications/SafeFlightDesktop.app/Contents/MacOS/SafeFlightDesktop --self-check > safeflight-mac-report/self-check.json
+sw_vers > safeflight-mac-report/macos.txt; uname -m >> safeflight-mac-report/macos.txt
+zip -r safeflight-mac-report.zip safeflight-mac-report
+```
 
-## 5. Lista de validación en Mac (pendiente)
+Enviar `safeflight-mac-report.zip` con la lista V-1…V-10 marcada, una captura de cada
+error y el nombre exacto del artefacto descargado. Revisar antes que los logs no contengan
+direcciones o datos que no deban compartirse.
 
-Anotar resultado, versión de macOS y chip en [test-log.md](../evaluation/test-log.md):
+## 8. Compilar desde el código (opcional)
 
-- [ ] El `.app` abre tras la excepción de Gatekeeper.
-- [ ] `SafeFlightDesktop.app/Contents/MacOS/SafeFlightDesktop --self-check` devuelve `"ok": true`.
-- [ ] Se muestra la ventana con mapa y HUD.
-- [ ] Perfil SITL + `python scripts/mavlink_test_sender.py --target 127.0.0.1:14560` → CONNECT → estado «MAVLink: OK».
-- [ ] Vídeo: `python scripts/rtp_test_sender.py --port 5004` con el perfil SITL → indicador «CAMERA LIVE».
-- [ ] Editar un perfil (IP/puerto), guardar, reiniciar la app y comprobar que se conserva.
-- [ ] El log de sesión se crea en `~/Library/Logs/SafeFlightDesktop/`.
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-build.txt
+python build.py        # dist/artifacts/SafeFlightDesktop-<versión>-macos-<arch>.zip
+```
 
-## 6. Problemas conocidos
+## 9. Problemas conocidos
 
-* «La app está dañada»: atributo de cuarentena; ver paso 4 de la opción A.
-* Sin vídeo ni telemetría y sin aviso: revisar *Privacidad y seguridad → Red local*.
-* El cortafuegos de macOS puede pedir permiso para conexiones entrantes UDP.
+* «Está dañada y no se puede abrir»: cuarentena de la descarga; ver sección 3.
+* Sin telemetría ni vídeo y sin aviso: *Ajustes del Sistema → Privacidad y seguridad → Red local*.
+* La app no abre en macOS 13 o anterior: requisito mínimo macOS 14.
