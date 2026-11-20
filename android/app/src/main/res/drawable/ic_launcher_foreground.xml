@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylised quadcopter: four rotors joined by two arms -->
+    <path android:strokeColor="@color/launcher_foreground" android:strokeWidth="4"
+        android:pathData="M38,38 L70,70 M70,38 L38,70" />
+    <path android:fillColor="@color/launcher_foreground"
+        android:pathData="M54,48 a6,6 0 1,1 0,12 a6,6 0 1,1 0,-12z" />
+    <path android:strokeColor="@color/launcher_foreground" android:strokeWidth="3"
+        android:pathData="M38,30 a8,8 0 1,1 0,16 a8,8 0 1,1 0,-16z M70,30 a8,8 0 1,1 0,16 a8,8 0 1,1 0,-16z M38,62 a8,8 0 1,1 0,16 a8,8 0 1,1 0,-16z M70,62 a8,8 0 1,1 0,16 a8,8 0 1,1 0,-16z" />
+</vector>
