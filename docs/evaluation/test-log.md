@@ -207,3 +207,21 @@ manualmente con `adb` porque `uiautomator` devolvía volcados incompletos en est
 (carga media ≈ 5). Conclusión: la APK funciona en Android 9 en emulador; el arnés automatizado
 es fiable en API 36 pero no en esta imagen API 28.
 Evidencias: [android-api28/](evidence/android-api28/).
+
+**T-22 — GitHub Actions (2026-11-20, commit `9757375`, rama `feature/multiplatform-android`).**
+Primer *push* de la rama. Ambos workflows se dispararon por *push* y terminaron correctamente
+sin cambios adicionales:
+
+| Plataforma | Job | Resultado | Artefacto |
+|---|---|---|---|
+| Windows x64 (`windows-2025`) | [desktop / windows-x64](https://github.com/Joowww/SafeFlightDesktop/actions/runs/44697720769/job/136158383504) | success | `SafeFlightDesktop-windows-x64` (160,4 MB) |
+| Linux x64 (`ubuntu-24.04`) | [desktop / linux-x64](https://github.com/Joowww/SafeFlightDesktop/actions/runs/44697720769/job/136158383429) | success | `SafeFlightDesktop-linux-x64` (211,7 MB) |
+| macOS Apple Silicon (`macos-15`) | [desktop / macos-arm64](https://github.com/Joowww/SafeFlightDesktop/actions/runs/44697720769/job/136158383119) | success | `SafeFlightDesktop-macos-arm64` (320,5 MB) |
+| macOS Intel (`macos-15-intel`) | [desktop / macos-x64](https://github.com/Joowww/SafeFlightDesktop/actions/runs/44697720769/job/136158383380) | success | `SafeFlightDesktop-macos-x64` (314,1 MB) |
+| Android (`ubuntu-24.04`) | [android / debug-apk](https://github.com/Joowww/SafeFlightDesktop/actions/runs/44697720790/job/136158382253) | success | `SafeFlight-Android-debug` (14,6 MB) y `SafeFlight-Android-reports` |
+
+Cada job ejecuta `python build.py`, que falla si fallan las pruebas o el *smoke test* del
+ejecutable empaquetado; el éxito implica ambos. Los recuentos exactos están en el
+`*.build-report.json` de cada artefacto (los logs de Actions requieren sesión en GitHub).
+Avisos informativos: cola de runners macOS arm64 y Gradle 8.14 desactualizado (ADR-0007).
+Que macOS compile en CI no valida la interfaz ni las conexiones en un Mac real.

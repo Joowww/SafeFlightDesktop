@@ -28,7 +28,7 @@ Correspondencia con la terminología de la memoria del TFG:
 
 | Funcionalidad | Windows | macOS | Linux | Android |
 |---|---|---|---|---|
-| Compilación | VERIFIED (T-03, T-14) | NOT_TESTED: dependencias resueltas para macOS 15 arm64/x64 (T-16); requiere runner macOS | VERIFIED en contenedor Ubuntu 24.04 (T-17) | VERIFIED (T-08, T-19) |
+| Compilación | VERIFIED (T-03, T-14); COMPILADO EN CI (T-22) | COMPILADO EN CI arm64 y x64 (T-22); sin validación en un Mac real | VERIFIED en contenedor Ubuntu 24.04 (T-17); COMPILADO EN CI (T-22) | VERIFIED (T-08, T-19); COMPILADO EN CI (T-22) |
 | Arranque | VERIFIED: ejecutable empaquetado (T-13 D-01) | NOT_TESTED | VERIFIED: paquete con interfaz bajo Xvfb (T-18) | VERIFIED en emulador API 36 (T-20) y API 28/Android 9 (T-21); BLOCKED en MK32 |
 | MAVLink | VERIFIED desde la interfaz con datos sintéticos (T-13 D-07) | NOT_TESTED | PARTIAL: pruebas de integración en contenedor (T-17); interfaz no ejercitada | VERIFIED en emulador API 36 (T-20) y API 28 (T-21) |
 | Vídeo | VERIFIED: RTP/UDP y RTSP dentro de la ventana (T-13 D-08, D-10) | NOT_TESTED | PARTIAL: receptor RTP/UDP en contenedor (T-17); RTSP omitido, interfaz no ejercitada | VERIFIED RTSP en emulador API 36 y API 28 (T-20, T-21) |
@@ -49,8 +49,8 @@ Correspondencia con la terminología de la memoria del TFG:
 | Ciclo de vida Android (liberación y reanudación de vídeo) | VERIFIED (API 36) | T-20 A-07 |
 | Persistencia de perfiles Android tras `force-stop` | VERIFIED (API 36) | T-20 A-08 |
 | Compatibilidad de la APK con Android 9 (API 28) | VERIFIED en emulador (instalación, arranque, perfil, telemetría, RTSP, ciclo de vida, persistencia, bloqueo de ARM); automatización de la interfaz solo parcial en esa imagen | T-21 |
-| Workflows de GitHub Actions | NOT_TESTED: definición revisada, versiones y dependencias comprobadas; requiere *push* autorizado | T-16 |
-| Paquete macOS | NOT_TESTED: requiere runner o Mac | — |
+| Workflows de GitHub Actions | VERIFIED: 5/5 jobs correctos en el commit `9757375` | T-22 |
+| Paquete macOS | COMPILADO EN CI (arm64 y x64, incluye *smoke test* del ejecutable en el runner); validación en Mac real pendiente | T-22 |
 | SafeFlight Android en SIYI MK32 | BLOCKED (sin hardware) | [deployment/mk32.md](../deployment/mk32.md) |
 | Enlace de datos SIYI real (Raspberry ↔ unidad aérea) | BLOCKED (sin hardware); no implementado en la Raspberry | — |
 | Telemetría de un autopiloto real o ArduPilot SITL | NOT_TESTED (solo generador sintético) | — |
