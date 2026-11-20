@@ -1,0 +1,24 @@
+{
+  "target": "desktop",
+  "version": "0.3.0",
+  "platform": "windows",
+  "arch": "x64",
+  "python": "3.12.1",
+  "commit": "704a540a9f3289dec4424b29f7c41da46a15f569",
+  "dirty_worktree": true,
+  "tests": "passed",
+  "smoke_test": "passed",
+  "validated": true,
+  "artifact": "dist\\artifacts\\SafeFlightDesktop-0.3.0-windows-x64.zip",
+  "sha256": "018774120dc9786afaf4cbd0d6e70378b2916c809f9c637f9acb1fb0dc6b57ee",
+  "test_summary": {
+    "tests": 78,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 78
+  },
+  "smoke_test_platform": "Windows-11-10.0.26300-SP0",
+  "status": "success",
+  "duration_s": 205.1
+}

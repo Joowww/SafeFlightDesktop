@@ -1,0 +1,104 @@
+{
+  "date": "2026-11-19 19:06:59",
+  "executable": "%USERPROFILE%\\SafeFlightDesktop-GitHub\\dist\\desktop\\windows-x64\\SafeFlightDesktop\\SafeFlightDesktop.exe",
+  "steps": [
+    {
+      "id": "D-01",
+      "description": "El ejecutable empaquetado arranca y muestra la ventana principal",
+      "result": "PASS",
+      "detail": "ventana 'SafeFlight Desktop', 30 elementos accesibles",
+      "evidence": [
+        "D-01-arranque.jpg"
+      ]
+    },
+    {
+      "id": "D-02",
+      "description": "Panel lateral: perfil por defecto y cadena MAVLink derivada del perfil",
+      "result": "PASS",
+      "detail": "MAVLink=udpin:0.0.0.0:14560; vídeo RTP/UDP :5004",
+      "evidence": [
+        "D-02-panel-lateral.jpg"
+      ]
+    },
+    {
+      "id": "D-03",
+      "description": "Crear un perfil nuevo desde el editor y guardarlo",
+      "result": "PASS",
+      "detail": "perfil 'custom' activo; panel lateral MAVLink=udpin:0.0.0.0:14571; fichero actualizado",
+      "evidence": [
+        "D-03-editor-nuevo.jpg"
+      ]
+    },
+    {
+      "id": "D-04",
+      "description": "Duplicar un perfil desde el editor y guardar la copia",
+      "result": "PASS",
+      "detail": "copia 'Banco de pruebas (copia)' (custom-copy); 5 perfiles en el fichero",
+      "evidence": []
+    },
+    {
+      "id": "D-05",
+      "description": "Seleccionar el perfil desde el desplegable del panel lateral",
+      "result": "PASS",
+      "detail": "perfil activo custom",
+      "evidence": []
+    },
+    {
+      "id": "D-06",
+      "description": "Persistencia: el perfil activo se conserva tras cerrar y reabrir",
+      "result": "PASS",
+      "detail": "tras reiniciar: MAVLink=udpin:0.0.0.0:14571",
+      "evidence": [
+        "D-06-reapertura.jpg"
+      ]
+    },
+    {
+      "id": "D-07",
+      "description": "CONNECT usa el endpoint del perfil (generador solo en el puerto del perfil)",
+      "result": "PASS",
+      "detail": "'MAVLink: OK · último heartbeat 0.0 s', HUD 'MODE: LOITER', 'SAT: 12'",
+      "evidence": []
+    },
+    {
+      "id": "D-08",
+      "description": "Vídeo RTP/UDP del perfil visible en la ventana",
+      "result": "PASS",
+      "detail": "'● CAMERA LIVE', 'RX 25.2 FPS  |  AGE 0 ms'",
+      "evidence": [
+        "D-08-telemetria-video-rtp.jpg"
+      ]
+    },
+    {
+      "id": "D-09",
+      "description": "Pérdida y recuperación del heartbeat reflejadas en pantalla",
+      "result": "PASS",
+      "detail": "'MAVLink: TELEMETRÍA OBSOLETA · 3.0 s' → 'MAVLink: OK · último heartbeat 0.1 s'",
+      "evidence": [
+        "D-09-heartbeat-perdido.jpg"
+      ]
+    },
+    {
+      "id": "D-10",
+      "description": "Cambiar la fuente de vídeo a RTSP desde el editor, sin reiniciar",
+      "result": "PASS",
+      "detail": "RTP detenido → '● SIGNAL LOST'; 'Fuente en uso: RTSP rtsp://127.0.0.1:18554/test (TCP)' → '● CAMERA LIVE'",
+      "evidence": [
+        "D-10-video-rtsp.png"
+      ]
+    },
+    {
+      "id": "D-11",
+      "description": "Cerrar la ventana libera procesos y puertos",
+      "result": "PASS",
+      "detail": "código de salida 0; sin procesos; puertos libres {14571: True, 5610: True}",
+      "evidence": []
+    },
+    {
+      "id": "D-12",
+      "description": "Registro de sesión en el directorio de logs del usuario",
+      "result": "PASS",
+      "detail": "2 ficheros de sesión; contienen conexión, cambio de vídeo y cierre",
+      "evidence": []
+    }
+  ]
+}

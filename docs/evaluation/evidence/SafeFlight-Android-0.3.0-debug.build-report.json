@@ -1,0 +1,22 @@
+{
+  "target": "android",
+  "version": "0.3.0",
+  "variant": "debug",
+  "commit": "704a540a9f3289dec4424b29f7c41da46a15f569",
+  "dirty_worktree": true,
+  "tests": "passed",
+  "validated": true,
+  "artifact": "dist\\artifacts\\SafeFlight-Android-0.3.0-debug.apk",
+  "sha256": "fb45842e372a963717a72a32522528114b0d0bf0cc164bfa620e5bd494b810bc",
+  "jdk": 21,
+  "android_sdk": "%USERPROFILE%\\AppData\\Local\\Android\\Sdk",
+  "test_summary": {
+    "tests": 25,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 25
+  },
+  "status": "success",
+  "duration_s": 28.9
+}
