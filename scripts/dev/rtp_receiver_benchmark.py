@@ -1,3 +1,4 @@
+"""Manual benchmark: CPU/memory of PyAV decoding the RTP stream of stream.sdp for 60 s (needs psutil)."""
 
 from pathlib import Path
 import os
@@ -6,7 +7,7 @@ import time
 import av
 import psutil
 
-SDP_PATH = Path(__file__).resolve().parent / "stream.sdp"
+SDP_PATH = Path(__file__).resolve().parents[2] / "stream.sdp"  # repository root
 DURATION_SECONDS = 60
 REPORT_SECONDS = 10
 

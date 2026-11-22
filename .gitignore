@@ -1,18 +1,30 @@
-# --- Entorno Virtual ---
+# --- Secrets and local configuration (never versioned) ---
+.env
+.env.*
+.secrets
+*.local
+*.param.env
+*.pem
+*.key
+*.pfx
+*.keystore
+*.jks
+
+# --- Python virtual environments ---
 .venv/
+.venv-win/
 venv/
 env/
 ENV/
 
-# --- Python ---
+# --- Python caches and packaging ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
+.pytest_cache/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -26,54 +38,35 @@ wheels/
 .installed.cfg
 *.egg
 
-# --- Configuración y Secretos ---
-.env
-.secrets
-*.local
-
-# --- Logs y Datos ---
-*.log
-telemetry_data/
-*.tlog
-*.rlog
-
-# --- Editores y Sistema ---
-#.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# --- DroneKit / MAVLink específicos ---
-# Si generas archivos de misión o parámetros
-*.waypoints
-*.param.env
-.env.*
-.venv/
-.venv-win/
-__pycache__/
-*.pyc
-*.log
-*.tlog
+# --- Build outputs (reproducible with `python build.py`) ---
 build/
 dist/
 dist_*/
 releases/
 *.exe
 *.zip
-*.pem
-*.key
-*.pfx
-.vscode/
+
+# --- Logs, telemetry and mission data ---
+*.log
+*.tlog
+*.rlog
+telemetry_data/
+*.waypoints
+
+# --- Local backups ---
 *.bak
 *.backup
 *.backup.*
 *.before-*
 *.video-backup
 
-# --- Test and build outputs ---
-.pytest_cache/
+# --- Editors and operating system ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
 
 # Legacy local Docker Hub workflow: kept on disk, intentionally not versioned
 # (see docs/architecture/build-and-deployment.md, section "Workflow heredado").

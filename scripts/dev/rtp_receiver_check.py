@@ -1,9 +1,10 @@
+"""Manual check: decode the RTP/H.264 stream described by stream.sdp (PyAV). Run from any directory."""
 
 from pathlib import Path
 
 import av
 
-SDP_PATH = Path(__file__).resolve().parent / "stream.sdp"
+SDP_PATH = Path(__file__).resolve().parents[2] / "stream.sdp"  # repository root
 
 def main():
     print(f"[VIDEO] SDP: {SDP_PATH}", flush=True)

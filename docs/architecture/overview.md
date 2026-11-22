@@ -88,11 +88,17 @@ radiocontrol, fuera del alcance de SafeFlight.*
 ```text
 SafeFlightDesktop/
 ├── App_flet.py, models/, ui/, assets/   SafeFlight Desktop (sin mover, ver ADR-0001)
+├── stream.sdp                           SDP RTP/UDP por defecto (recurso empaquetado)
+├── main.py, main_production.py,         interfaces heredadas (no empaquetadas)
+│   App_tkinter.py
+├── Dockerfile, docker-compose.yml       despliegue web heredado en contenedor
 ├── android/                             SafeFlight Android (proyecto Gradle independiente)
 ├── shared/                              contratos: esquemas, protocolo, vectores, ejemplos
 ├── packaging/desktop/                   especificación PyInstaller multiplataforma
 ├── scripts/                             generadores de prueba (MAVLink, RTP, servidor RTSP)
+│   └── dev/                             herramientas manuales del receptor RTP
 ├── tests/desktop/                       pruebas de Desktop (pytest)
+├── tests/gui/, tests/sitl/              validación de interfaz (Windows/emulador) y SITL
 ├── docs/                                arquitectura, ADR, desarrollo, despliegue, evaluación
 ├── .github/workflows/                   CI Desktop (4 plataformas), Android y release
 ├── build.py                             punto único de compilación
