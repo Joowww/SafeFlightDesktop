@@ -39,6 +39,7 @@ from models.DroneManager import DroneManager
 from models import CommandGuard as cg
 from models.Trajectory import Trajectory
 from models.AppPaths import resource_dir, user_config_dir
+from models.MapView import MapFollower, MapViewStore, vehicle_position
 from models.AppLogging import active_log_path, start_session_log
 from models.ConnectionProfiles import (
     ConnectionProfile,
@@ -303,12 +304,14 @@ class SafeFlightApp:
         self.last_heading = -1
         self.altitude_history: List[float] = []
         self.is_video_main = False
-        self.map_follow_drone = True
-        self.map_initialized = False
-        self.last_centered_pos = None
+        # Map view: saved operator view or world view; vehicle GPS only when trustworthy.
+        self.map_view_store = MapViewStore().load()
+        if self.map_view_store.warning:
+            print(f"[MAPA] {self.map_view_store.warning}", flush=True)
+        _view = self.map_view_store.initial_view()
+        self.map_follower = MapFollower(follow=True)
+        self.map_current_view = (_view.lat, _view.lon, _view.zoom)
         self.drone_icon_container = None
-        self.last_known_lat = 41.3874
-        self.last_known_lon = 2.1686
         self._pressed_keys: set = set()
    
         
@@ -441,16 +444,65 @@ class SafeFlightApp:
         self.pressed_keys.discard(key)
         self._push_keys_to_controller()
         
-    async def _initialize_map_at_drone(self, lat, lon):
-        await asyncio.sleep(0.3)
+    async def _move_map_to(self, view):
+        """Moves the map camera; failures (map not mounted yet) are retried on the next update."""
         try:
-            await self.map_widget.center_on(
-                point=fmap.MapLatitudeLongitude(lat, lon),
-                zoom=19,
-            )
-            self.map_initialized = True
+            await self.map_widget.center_on(point=fmap.MapLatitudeLongitude(view.lat, view.lon), zoom=view.zoom)
+            self.map_current_view = (view.lat, view.lon, view.zoom)
+            return True
         except Exception:
-            pass
+            return False
+
+    def _preserve_map_view(self):
+        """The map widget is rebuilt when panels move: reopen it on the current view."""
+        lat, lon, zoom = self.map_current_view
+        self.map_widget.initial_center = fmap.MapLatitudeLongitude(lat, lon)
+        self.map_widget.initial_zoom = zoom
+
+    def _on_map_position_change(self, e):
+        try:
+            self.map_current_view = (e.coordinates.latitude, e.coordinates.longitude, e.camera.zoom)
+        except Exception:
+            return
+        if getattr(e, "has_gesture", False) and self.map_follower.user_moved_map():
+            self.follow_drone_switch.value = False
+            self._update_map_source_text("Seguimiento desactivado al mover el mapa")
+            self._safe_page_update()
+
+    def _update_map_source_text(self, extra=None):
+        if self.map_follower.last_position is not None:
+            source = "posición del dron (GPS 3D)"
+        elif self.map_view_store.saved is not None:
+            source = "vista inicial guardada"
+        else:
+            source = "vista mundial (sin GPS válido del dron)"
+        self.map_source_text.value = f"Mapa: {source}" + (f" · {extra}" if extra else "")
+
+    async def _on_follow_drone_change(self, e):
+        view = self.map_follower.set_follow(bool(self.follow_drone_switch.value))
+        if self.follow_drone_switch.value and view is None:
+            self._update_map_source_text("se centrará con el primer GPS 3D válido")
+        else:
+            self._update_map_source_text()
+        if view is not None:
+            await self._move_map_to(view)
+        self._safe_page_update()
+
+    async def _save_map_view(self, e=None):
+        try:
+            camera = await self.map_widget.get_camera()
+            view = self.map_view_store.save_view(camera.center.latitude, camera.center.longitude, camera.zoom)
+        except Exception as exc:
+            self._show_message(f"No se pudo guardar la vista del mapa: {exc}", error=True)
+            return
+        print(f"[MAPA] Vista inicial guardada: {view.lat:.6f}, {view.lon:.6f} · zoom {view.zoom:.1f}", flush=True)
+        self._update_map_source_text()
+        self._show_message("Vista guardada como ubicación inicial del mapa.")
+
+    def _clear_map_view(self, e=None):
+        self.map_view_store.clear()
+        self._update_map_source_text()
+        self._show_message("Vista inicial eliminada: el mapa abrirá en la vista mundial sin GPS del dron.")
         
         
     def _on_page_disconnect(self, e):
@@ -644,6 +696,22 @@ class SafeFlightApp:
             
         )
 
+        self.follow_drone_switch = ft.Switch(
+            label="Seguir dron",
+            value=True,
+            on_change=self._on_follow_drone_change,
+        )
+        self.btn_save_map_view = ft.TextButton(
+            "Guardar esta vista como ubicación inicial",
+            on_click=self._save_map_view,
+        )
+        self.btn_clear_map_view = ft.TextButton(
+            "Olvidar vista guardada",
+            on_click=self._clear_map_view,
+        )
+        self.map_source_text = ft.Text("", color="#aaaaaa", size=11)
+        self._update_map_source_text()
+
         self.vr_switch = ft.Switch(
             label="VR Origen",
             value=False,
@@ -715,6 +783,17 @@ class SafeFlightApp:
                     self.btn_save_traj,
                     self.btn_load_traj,
                     self.btn_clear_traj,
+                    ft.Divider(color="#333333"),
+                    ft.Text(
+                        "MAPA",
+                        size=12,
+                        weight=ft.FontWeight.BOLD,
+                        color="gray",
+                    ),
+                    self.follow_drone_switch,
+                    self.map_source_text,
+                    self.btn_save_map_view,
+                    self.btn_clear_map_view,
                     ft.Divider(color="#333333"),
                     ft.Text(
                         "APP SETTINGS",
@@ -832,13 +911,14 @@ class SafeFlightApp:
         
         self.map_widget = fmap.Map(
             expand=True,
-            initial_center=fmap.MapLatitudeLongitude(41.3874, 2.1686),
-            initial_zoom=18,
+            initial_center=fmap.MapLatitudeLongitude(self.map_current_view[0], self.map_current_view[1]),
+            initial_zoom=self.map_current_view[2],
             interaction_configuration=fmap.InteractionConfiguration(
                 flags=fmap.InteractionFlag.ALL,
                 keyboard_configuration=fmap.KeyboardConfiguration(autofocus=False, enable_arrow_keys_panning=False, enable_wasd_panning=False),
             ),
             on_tap=self._map_left_click_add_point,
+            on_position_change=self._on_map_position_change,
             #on_event=self._map_event_fallback,
             layers=self.map_layers,
         )
@@ -1100,19 +1180,7 @@ class SafeFlightApp:
             return
         self.sidebar_visible = not self.sidebar_visible
         self.sidebar.visible = self.sidebar_visible
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self.btn_toggle_sidebar.style = ft.ButtonStyle(
             bgcolor="#3b8ed0" if self.sidebar_visible else "#1e1e2e",
             color="white",
@@ -1125,19 +1193,7 @@ class SafeFlightApp:
             return
         self.telemetry_visible = not self.telemetry_visible
         self.telemetry_frame.visible = self.telemetry_visible
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self.btn_toggle_telemetry.style = ft.ButtonStyle(
             bgcolor="#3b8ed0" if self.telemetry_visible else "#1e1e2e",
             color="white",
@@ -1179,19 +1235,7 @@ class SafeFlightApp:
         if self.closing:
             return
         self.is_video_main = not self.is_video_main
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self._arrange_views()
 
 
@@ -1780,24 +1824,16 @@ class SafeFlightApp:
                     heading = vehicle.heading or 0
                     #print("DRONE POS:", lat, lon)
                     if lat is not None and lon is not None:
-                        self.last_known_lat = lat
-                        self.last_known_lon = lon   
                         self._update_drone_on_map(lat, lon, heading)
-
-                        if self.map_follow_drone:
-
-                            # Primera posición GPS
-                            if not self.map_initialized:
-                                await self._initialize_map_at_drone(lat, lon)
-                                self.last_centered_pos = (lat, lon)
-                            else:
-                                c_lat, c_lon = self.last_centered_pos
-                                if abs(lat - c_lat) > 0.0006 or abs(lon - c_lon) > 0.0006:
-                                    try:
-                                        await self.map_widget.center_on(point = fmap.MapLatitudeLongitude(lat, lon), zoom = 19)
-                                        self.last_centered_pos = (lat, lon)
-                                    except Exception:
-                                        pass
+                    # The map only moves to a recent 3D fix of the vehicle.
+                    gps_fix = vehicle.gps_0.fix_type if vehicle.gps_0 else None
+                    first_fix = self.map_follower.last_position is None
+                    target = self.map_follower.update(
+                        vehicle_position(lat, lon, gps_fix, self.drone_manager.gps_position_age_s()))
+                    if target is not None and not await self._move_map_to(target):
+                        self.map_follower.centred_on = None  # retry on the next update
+                    if first_fix and self.map_follower.last_position is not None:
+                        self._update_map_source_text()
 
                     alt = max(0, vehicle.location.global_relative_frame.alt or 0)
                     self.altitude_history.append(alt)
@@ -2699,12 +2735,8 @@ class SafeFlightApp:
         self.last_heading = -1
         self.altitude_history: List[float] = []
         self.is_video_main = False
-        self.map_follow_drone = True
-        self.map_initialized = False
-        self.last_centered_pos = None
+        self.map_follower.reset()
         self.drone_icon_container = None
-        self.last_known_lat = 41.3874
-        self.last_known_lon = 2.1686
         print("✓ DroneManager global destruido")
     # UTILIDADES UI
     # ========================================================

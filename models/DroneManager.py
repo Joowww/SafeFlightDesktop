@@ -42,6 +42,7 @@ class DroneManager:
         self.guard.set_snapshot_source(self.snapshot)
         self.identity = None  # (sysid, compid, type) of the autopilot heartbeat
         self.last_error = ""
+        self._position_rx = {}  # message type -> monotonic reception time
 
     # ------------------------------------------------------------------ link
     def setup_drone(self, mode="SIM", connection_string=None, baud_rate=57600,
@@ -64,6 +65,7 @@ class DroneManager:
             return False
         self.guard.revoke("Nueva conexión")
         self.identity = None
+        self._position_rx = {}
         self.link = DroneConnection(
             conn_str,
             baud_rate=baud_rate,
@@ -77,6 +79,8 @@ class DroneManager:
             self.guard.install(vehicle._master)
             vehicle.add_message_listener("HEARTBEAT", self._on_heartbeat)
             vehicle.add_message_listener("COMMAND_ACK", self._on_command_ack)
+            vehicle.add_message_listener("GLOBAL_POSITION_INT", self._on_position_message)
+            vehicle.add_message_listener("GPS_RAW_INT", self._on_position_message)
             self.health = HeartbeatMonitor(self.link)
             self.health.start(on_loss_callback=self._handle_link_loss)
             self.kb_controller = KeyboardController(vehicle, guard=self.guard)
@@ -95,6 +99,20 @@ class DroneManager:
         elif identity[:2] != self.identity[:2] and msg.get_srcComponent() == 1:
             print(f"[LINK] Heartbeat de otro autopiloto: SYSID {identity[0]} (sesión: {self.identity[0]})")
             self.identity = identity
+
+    def _on_position_message(self, _vehicle, name, _msg):
+        self._position_rx[name] = time.monotonic()
+
+    def gps_position_age_s(self):
+        """Age of the oldest of GLOBAL_POSITION_INT and GPS_RAW_INT; None until both arrived.
+
+        A recent heartbeat alone does not make a position recent: the map only
+        trusts a position whose own messages are recent.
+        """
+        times = [self._position_rx.get(n) for n in ("GLOBAL_POSITION_INT", "GPS_RAW_INT")]
+        if None in times:
+            return None
+        return time.monotonic() - min(times)
 
     def _on_command_ack(self, _vehicle, _name, msg):
         self.guard.on_command_ack(int(msg.command), int(msg.result))
