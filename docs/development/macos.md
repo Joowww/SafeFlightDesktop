@@ -99,8 +99,8 @@ Marcar cada punto y anotar resultado, versión de macOS y chip:
 - [ ] **V-5** Cerrar y reabrir la app: sigue seleccionado «Prueba Mac».
 - [ ] **V-6** Con el generador en el puerto del perfil (`--target 127.0.0.1:14571`), pulsar **CONNECT**: «MAVLink: OK», HUD con `MODE: LOITER` y `SAT: 12`.
 - [ ] **V-7** Detener el generador (Ctrl+C) unos 5 s: «TELEMETRÍA OBSOLETA»; relanzarlo: vuelve «MAVLink: OK».
-- [ ] **V-8** Vídeo RTP: en el editor, puerto RTP del perfil `5004`, ejecutar `rtp_test_sender.py --port 5004`: indicador «CAMERA LIVE».
-- [ ] **V-9** Vídeo RTSP: en el editor, *Fuente de vídeo* → RTSP, URL de la sección 5 → *Guardar*: «CAMERA LIVE» sin reiniciar la app.
+- [ ] **V-8** Vídeo RTP: en el editor, puerto RTP del perfil `5004`, ejecutar `rtp_test_sender.py --port 5004`: indicador «EN DIRECTO» (panel VÍDEO: protocolo, resolución y FPS).
+- [ ] **V-9** Vídeo RTSP: en el editor, *Fuente de vídeo* → RTSP, URL de la sección 5 → *Guardar*: «EN DIRECTO» sin reiniciar la app.
 - [ ] **V-10** Cerrar la ventana: la app termina (sin icono en el Dock ni proceso `SafeFlightDesktop` en *Monitor de Actividad*).
 
 No conectar con el dron real durante esta prueba.

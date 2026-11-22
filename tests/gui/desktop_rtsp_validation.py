@@ -11,18 +11,19 @@ Automation "Invoke", so it can run while the desktop is in use.
 
   R-01 RASPBERRY / CUBE (LAB) with video RTSP: CONNECT, telemetry, monitor-only state
   R-02 RTSP frames: resolution, FPS and frame age
-  R-03 RTSP server down and up: SIGNAL LOST and automatic recovery (MAVLink unaffected)
+  R-03 RTSP server down and up: "Sin señal" and automatic recovery (MAVLink unaffected)
   R-04 MAVLink and CommandGuard unaffected (no command sent by the GCS)
   R-05 relaunch with the same profile in RTP/UDP 5004: video from RTP
   R-06 close the window: exit code 0
 
-    python tests/gui/desktop_rtsp_validation.py --exe <path to SafeFlightDesktop.exe>
+    python tests/gui/desktop_rtsp_validation.py --exe <SafeFlightDesktop.exe | App_flet.py> [--expect-origin]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -42,6 +43,11 @@ PROFILE_ID = "raspberry-lab"
 MAVLINK_PORT = 14560
 RTP_PORT = 5004
 RTSP_URL = "rtsp://127.0.0.1:18554/test"
+# Overlay labels: current build and the frozen 24/11 build (older English labels).
+LIVE_LABELS = ("● EN DIRECTO", "● CAMERA LIVE")
+LOST_LABELS = ("● SIN SEÑAL", "● SIGNAL LOST")
+# With the server stopped the current build reports the refused connection as a reception error.
+OUTAGE_LABELS = LOST_LABELS + ("● ERROR DE RECEPCIÓN",)
 # MAV_CMD 511/512/519/520 are read-only requests (message interval / capabilities) that
 # CommandGuard allows; DroneKit repeats 520 while the synthetic sender does not answer it.
 READ_ONLY_COMMANDS = {"COMMAND_LONG:511", "COMMAND_LONG:512", "COMMAND_LONG:519", "COMMAND_LONG:520"}
@@ -81,6 +87,21 @@ def console_text():
     return "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(g.WORK.glob("console-*.txt")))
 
 
+def launch_app():
+    """Packaged exe, or App_flet.py run from source with the current interpreter."""
+    if g.EXE.suffix != ".py":
+        return g.launch()
+    env = {**os.environ, "SAFEFLIGHT_CONFIG_DIR": str(g.CONFIG_DIR), "SAFEFLIGHT_LOG_DIR": str(g.LOG_DIR),
+           "PYTHONIOENCODING": "utf-8"}
+    console = open(g.WORK / f"console-{int(time.time())}.txt", "w", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(g.EXE)], cwd=g.EXE.parent, env=env, stdout=console,
+                            stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+    gui = g.Gui(proc)
+    gui.wait_window(timeout=90)
+    time.sleep(3)
+    return gui
+
+
 def kill_tree(gui):
     if gui and gui.proc.poll() is None:  # also stops the Flutter client child processes
         subprocess.run(["taskkill", "/PID", str(gui.proc.pid), "/T", "/F"], capture_output=True)
@@ -89,6 +110,8 @@ def kill_tree(gui):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", required=True)
+    parser.add_argument("--expect-origin", action="store_true",
+                        help="require the test source declared in the stream metadata (builds after 24/11)")
     args = parser.parse_args()
     exe = Path(args.exe)
     g.EXE, g.EXE_DIR = exe, exe.parent
@@ -106,7 +129,7 @@ def main() -> int:
     try:
         s = Step("R-01", "Perfil RASPBERRY / CUBE (LAB) con vídeo RTSP: CONNECT, telemetría, solo monitorización")
         prepare_profile("rtsp")
-        gui = g.launch()
+        gui = launch_app()
         gui.open_sidebar_if_closed()
         mav = gui.edit_value("MAVLink")
         src = gui.wait_text(lambda t: t.startswith("Fuente en uso: RTSP"), timeout=10)
@@ -120,23 +143,28 @@ def main() -> int:
             else s.fail(f"mavlink={mav}, src={src}, ok={ok}, guard={guard}")
 
         s = Step("R-02", "Vídeo RTSP: fotogramas, resolución, FPS y antigüedad")
-        live = gui.wait_text(lambda t: t == "● CAMERA LIVE", timeout=60)
+        live = gui.wait_text(lambda t: t in LIVE_LABELS, timeout=60)
         m = live_metrics(gui)
         res = re.findall(r"Se.al recibida: (\d+x\d+)", console_text())  # console is not UTF-8
-        s.ok(f"'{live}'; resolución {res[-1]}; RX {m[0]:.1f} FPS; AGE {m[1]} ms") \
-            if live and m and m[0] >= 10 and res else s.fail(f"live={live}, metrics={m}, res={res}")
+        origin = gui.wait_text(lambda t: t.startswith(("Origen declarado", "Origen desconocido")),
+                               timeout=10 if args.expect_origin else 2)
+        origin_ok = not args.expect_origin or (origin or "").startswith("Origen declarado: fuente de prueba")
+        s.ok(f"'{live}'; resolución {res[-1]}; RX {m[0]:.1f} FPS; AGE {m[1]} ms; origen: {origin}") \
+            if live and m and m[0] >= 10 and res and origin_ok \
+            else s.fail(f"live={live}, metrics={m}, res={res}, origen={origin}")
 
         s = Step("R-03", "Caída del servidor RTSP y recuperación automática; MAVLink sigue activo")
         subprocess.run(["docker", "stop", "safeflight-rtsp-test"], capture_output=True)
-        lost = gui.wait_text(lambda t: t == "● SIGNAL LOST", timeout=30)
+        lost = gui.wait_text(lambda t: t in OUTAGE_LABELS, timeout=30)
+        reason = gui.wait_text(lambda t: t.startswith("Motivo: "), timeout=3)
         mav_during = gui.wait_text(lambda t: t.startswith("MAVLink: OK"), timeout=5)
         time.sleep(5)
         subprocess.run(["docker", "start", "safeflight-rtsp-test"], capture_output=True)
         t0 = time.monotonic()
-        back = gui.wait_text(lambda t: t == "● CAMERA LIVE", timeout=90)
+        back = gui.wait_text(lambda t: t in LIVE_LABELS, timeout=90)
         took = time.monotonic() - t0
         m = live_metrics(gui, samples=3)
-        s.ok(f"'{lost}' (MAVLink durante la caída: '{mav_during}') → '{back}' {took:.0f} s tras arrancar el "
+        s.ok(f"'{lost}' {reason or ''} (MAVLink durante la caída: '{mav_during}') → '{back}' {took:.0f} s tras arrancar el "
              f"servidor; RX {m[0]:.1f} FPS") if lost and back and mav_during and m \
             else s.fail(f"lost={lost}, back={back}, mavlink={mav_during}, m={m}")
 
@@ -156,12 +184,12 @@ def main() -> int:
         s = Step("R-05", "Mismo perfil en RTP/UDP 5004 (relanzado): vídeo RTP")
         prepare_profile("rtp_udp")
         rtp = g.RtpTestSender(port=RTP_PORT, width=1280, height=720, fps=25).start()
-        gui = g.launch()
+        gui = launch_app()
         gui.open_sidebar_if_closed()
         src = gui.wait_text(lambda t: t.startswith("Fuente en uso: RTP"), timeout=10)
         sim = g.TelemetrySimulator("127.0.0.1", MAVLINK_PORT, rate_hz=8, custom_mode=5).start()
         gui.invoke("CONNECT")
-        live = gui.wait_text(lambda t: t == "● CAMERA LIVE", timeout=40)
+        live = gui.wait_text(lambda t: t in LIVE_LABELS, timeout=40)
         ok = gui.wait_text(lambda t: t.startswith("MAVLink: OK"), timeout=120)
         m = live_metrics(gui)
         s.ok(f"'{src}' → '{live}'; RX {m[0]:.1f} FPS; '{ok}'") if src and live and m and ok \

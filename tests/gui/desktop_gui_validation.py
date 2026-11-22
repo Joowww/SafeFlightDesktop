@@ -52,6 +52,9 @@ PROFILE_NAME = "Banco de pruebas"
 MAVLINK_PORT = 14571
 RTP_PORT = 5610
 RTSP_URL = "rtsp://127.0.0.1:18554/test"
+# Overlay labels: current build and the frozen 24/11 build (older English labels).
+LIVE_LABELS = ("● EN DIRECTO", "● CAMERA LIVE")
+LOST_LABELS = ("● SIN SEÑAL", "● SIGNAL LOST")
 
 
 class Step:
@@ -327,7 +330,7 @@ def main() -> int:
             s.fail(f"estado={ok}, modo={mode}, sat={sats}")
 
         s = Step("D-08", "Vídeo RTP/UDP del perfil visible en la ventana")
-        live = gui.wait_text(lambda t: t == "● CAMERA LIVE", timeout=40)
+        live = gui.wait_text(lambda t: t in LIVE_LABELS, timeout=40)
         fps = gui.wait_text(lambda t: t.startswith("RX ") and not t.startswith("RX 0.0"), timeout=10)
         gui.shot("D-08-telemetria-video-rtp.png", s)
         s.ok(f"'{live}', '{fps}'") if live and fps else s.fail(f"live={live}, fps={fps}")
@@ -348,12 +351,12 @@ def main() -> int:
         else:
             rtp.stop()
             rtp = None
-            lost = gui.wait_text(lambda t: t == "● SIGNAL LOST", timeout=15)
+            lost = gui.wait_text(lambda t: t in LOST_LABELS, timeout=15)
             gui.invoke("Editar perfiles…")
             gui.select("Fuente de vídeo", "RTSP (servidor remoto)")
             gui.type_into("URL RTSP", RTSP_URL)
             gui.invoke("Guardar y seleccionar")
-            live = gui.wait_text(lambda t: t == "● CAMERA LIVE", timeout=60)
+            live = gui.wait_text(lambda t: t in LIVE_LABELS, timeout=60)
             src = gui.wait_text(lambda t: t.startswith("Fuente en uso: RTSP"), timeout=5)
             try:  # make the video the main view for the evidence screenshot
                 swap = max((e for e in gui.elements("Button") if e.window_text().startswith("Error displaying")),

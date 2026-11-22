@@ -40,6 +40,8 @@ from models import CommandGuard as cg
 from models.Trajectory import Trajectory
 from models.AppPaths import resource_dir, user_config_dir
 from models.MapView import MapFollower, MapViewStore, vehicle_position
+from models import VideoStatus as vstatus
+from models import ArProjection as arp
 from models.AppLogging import active_log_path, start_session_log
 from models.ConnectionProfiles import (
     ConnectionProfile,
@@ -64,6 +66,8 @@ _g_stream_sdp = None
 _g_stream_generation = 0
 _g_rtsp_transport = "tcp"
 _g_video_reconnect_s = 1.0
+# What the receiver actually observes (attempts, stream, frames, errors).
+_g_video_status = vstatus.VideoStatusTracker()
 
 
 def _set_global_video_source(source, rtsp_transport="tcp", reconnect_s=1.0):
@@ -75,6 +79,10 @@ def _set_global_video_source(source, rtsp_transport="tcp", reconnect_s=1.0):
         _g_rtsp_transport = rtsp_transport if rtsp_transport in ("tcp", "udp") else "tcp"
         _g_video_reconnect_s = max(0.2, float(reconnect_s))
         _g_stream_generation += 1
+        is_rtsp = bool(source) and str(source).startswith(("rtsp://", "rtsps://"))
+        protocol = None if not source else (f"RTSP/{_g_rtsp_transport.upper()}" if is_rtsp else "RTP/UDP")
+        _g_video_status.set_source(_g_stream_generation, protocol,
+                                   redact_url(source) if is_rtsp else source)
         _g_latest_frame = None
         _g_video_last_frame_at = None
         _g_video_frame_times.clear()
@@ -109,6 +117,7 @@ def _global_video_worker():
                 flush=True,
             )
             source_options = {"rtsp_transport": rtsp_transport} if is_rtsp else options
+            _g_video_status.attempt_started(generation)
 
             with av.open(
                 source,
@@ -119,6 +128,12 @@ def _global_video_worker():
             ) as container:
 
                 first_frame_received = False
+                try:
+                    _stream = container.streams.video[0]
+                    _g_video_status.stream_opened(
+                        generation, _stream.codec_context.name, container.metadata.get("title"))
+                except Exception:
+                    _g_video_status.stream_opened(generation, None, None)
 
                 for decoded_frame in container.decode(video=0):
                     if not _g_video_thread_running:
@@ -136,6 +151,7 @@ def _global_video_worker():
                         _g_latest_frame = frame
                         _g_video_last_frame_at = received_at
                         _g_video_frame_times.append(received_at)
+                    _g_video_status.frame(generation, frame.shape[1], frame.shape[0], received_at)
 
                     if not first_frame_received:
                         print(
@@ -146,12 +162,14 @@ def _global_video_worker():
                         first_frame_received = True
 
                 if _g_video_thread_running and generation == _g_stream_generation:
+                    _g_video_status.stream_ended(generation)
                     print(
                         "[GLOBAL VIDEO] Flujo interrumpido.",
                         flush=True,
                     )
 
         except Exception as exc:
+            _g_video_status.attempt_failed(generation, exc)
             if _g_video_thread_running:
                 print(
                     "[GLOBAL VIDEO] Sin señal o error: "
@@ -316,6 +334,9 @@ class SafeFlightApp:
    
         
         self.vr_enabled = False
+        self.ar_camera, _ar_warning = arp.load_camera()
+        if _ar_warning:
+            print(f"[AR] {_ar_warning}", flush=True)
         self.current_trajectory = Trajectory("test_trajectory")
         self.trajectory_path = None
         self.trajectory_markers = []
@@ -712,8 +733,9 @@ class SafeFlightApp:
         self.map_source_text = ft.Text("", color="#aaaaaa", size=11)
         self._update_map_source_text()
 
+        self.ar_info_text = ft.Text(self._ar_info(), color="#aaaaaa", size=10)
         self.vr_switch = ft.Switch(
-            label="VR Origen",
+            label="Realidad aumentada (AR)",
             value=False,
             on_change=self._on_vr_switch_change,
         )
@@ -722,6 +744,25 @@ class SafeFlightApp:
             f"Fuente en uso: {self.active_profile.video_summary()}",
             color="#aaaaaa",
             size=11,
+        )
+        self.video_state_text = ft.Text("● Conectando", color="#facc15", size=13, weight=ft.FontWeight.BOLD)
+        self.video_summary_text = ft.Text("—", color="#dddddd", size=12)
+        self.video_origin_text = ft.Text("Origen desconocido (sin flujo)", color="#aaaaaa", size=11)
+        self.video_reason_text = ft.Text("", color="#fb923c", size=11, visible=False)
+        self.video_diag_text = ft.Text("", color="#9ca3af", size=10, selectable=True, visible=False)
+        self.btn_video_diag = ft.TextButton("Diagnóstico", on_click=self._toggle_video_diagnostics)
+        self.video_panel = ft.Column(
+            spacing=3,
+            controls=[
+                self.video_state_text,
+                self.video_summary_text,
+                self.video_origin_text,
+                self.video_reason_text,
+                self.video_port_info_text,
+                ft.Text("Se cambia en el perfil (Editar perfiles…).", color="#777777", size=10),
+                self.btn_video_diag,
+                self.video_diag_text,
+            ],
         )
         log_path = active_log_path()
         self.log_path_text = ft.Text(
@@ -802,19 +843,15 @@ class SafeFlightApp:
                         color="gray",
                     ),
                     self.vr_switch,
+                    self.ar_info_text,
                     ft.Divider(color="#333333"),
                     ft.Text(
-                        "VIDEO INPUT (RTP / RTSP)",
+                        "VÍDEO",
                         size=12,
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
-                    self.video_port_info_text,
-                    ft.Text(
-                        "La fuente de vídeo se edita en el perfil y se aplica al guardar.",
-                        color="#777777",
-                        size=10,
-                    ),
+                    self.video_panel,
                     self.log_path_text,
                 ],
             ),
@@ -842,8 +879,8 @@ class SafeFlightApp:
         # Indicador independiente del fotograma: mantiene su tamaño en
         # la vista previa pequeña y en la vista principal.
         self.video_status_text = ft.Text(
-            "● SIGNAL LOST",
-            color="#fb7185",
+            "● CONECTANDO",
+            color="#facc15",
             size=11,
             weight=ft.FontWeight.BOLD,
             no_wrap=True,
@@ -870,7 +907,6 @@ class SafeFlightApp:
             ),
         )
         self._video_status_last_update = 0.0
-        self._video_status_live = False
 
         self.video_container_big = ft.Container(
             bgcolor="black",
@@ -1279,6 +1315,48 @@ class SafeFlightApp:
     def _on_vr_switch_change(self, e):
         self.vr_enabled = bool(e.control.value)
 
+    def _ar_info(self):
+        cam = self.ar_camera
+        text = f"Mostrar Home y puntos de misión sobre el vídeo. {cam.describe()}."
+        if not cam.calibrated:
+            text += " Posiciones APROXIMADAS (distancias con «~»)."
+        elif not cam.stabilized:
+            text += " Aproximadas también si falta la actitud del dron o hay alabeo > 5°."
+        return text
+
+    def _ar_pose(self, vehicle):
+        """(lat, lon, alt_rel, heading) only with a recent 3D fix; otherwise nothing is drawn."""
+        loc = vehicle.location.global_relative_frame
+        if loc is None or vehicle.heading is None:
+            return None
+        fix = vehicle.gps_0.fix_type if vehicle.gps_0 else None
+        if vehicle_position(loc.lat, loc.lon, fix, self.drone_manager.gps_position_age_s()) is None:
+            return None
+        return loc.lat, loc.lon, loc.alt or 0.0, float(vehicle.heading)
+
+    @staticmethod
+    def _ar_attitude(vehicle):
+        """(pitch_deg, roll_deg) of the vehicle, or None when not received."""
+        att = getattr(vehicle, "attitude", None)
+        if att is None or att.pitch is None or att.roll is None:
+            return None
+        return math.degrees(att.pitch), math.degrees(att.roll)
+
+    def _draw_ar_banner(self, frame, has_pose, attitude=None):
+        reason = arp.accuracy(self.ar_camera, attitude)
+        if not has_pose:
+            label, color = "AR: SIN POSICION GPS VALIDA", (0, 0, 255)
+        elif reason == "cámara sin calibrar":
+            label, color = "AR APROXIMADA: CAMARA SIN CALIBRAR", (0, 200, 255)
+        elif reason:
+            label, color = "AR APROXIMADA: ORIENTACION DE CAMARA NO FIABLE", (0, 200, 255)
+        else:
+            label, color = "AR", (0, 255, 0)
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        x0 = frame.shape[1] - tw - 16
+        cv2.rectangle(frame, (x0 - 6, 8), (x0 + tw + 6, 8 + th + 12), (0, 0, 0), -1)
+        cv2.putText(frame, label, (x0, 8 + th + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
     # ========================================================
     # CONNECTION PROFILES / VIDEO SOURCE
     # ========================================================
@@ -1422,33 +1500,46 @@ class SafeFlightApp:
         print("VIDEO: thread finalizado limpiamente")
             
 
-    def _update_video_status_overlay(self, live, rx_fps=0.0, frame_age_ms=None):
-        """Actualiza el indicador a un máximo de dos veces por segundo."""
+    def _refresh_video_status(self, force=False):
+        """Overlay and VÍDEO panel from what the receiver observed (max. 2 updates/s)."""
         now = time.monotonic()
-        if (
-            live == self._video_status_live
-            and now - self._video_status_last_update < 0.5
-        ):
+        if not force and now - self._video_status_last_update < 0.5:
             return
-
-        self._video_status_live = live
         self._video_status_last_update = now
+        snap = _g_video_status.snapshot(stale_s=self.active_profile.timeouts.video_stale_s)
 
-        if live:
-            age_text = "--" if frame_age_ms is None else f"{frame_age_ms:.0f}"
-            self.video_status_text.value = "● CAMERA LIVE"
-            self.video_status_text.color = "#4ade80"
-            self.video_metrics_text.value = (
-                f"RX {rx_fps:.1f} FPS  |  AGE {age_text} ms"
-            )
+        self.video_status_text.value = f"● {snap.label.upper()}"
+        self.video_status_text.color = snap.color
+        if snap.state == vstatus.LIVE:
+            age = "--" if snap.age_ms is None else f"{snap.age_ms:.0f}"
+            metrics = f"RX {snap.fps:.1f} FPS  |  AGE {age} ms"
         else:
-            self.video_status_text.value = "● SIGNAL LOST"
-            self.video_status_text.color = "#fb7185"
-            self.video_metrics_text.value = "RX 0.0 FPS  |  AGE -- ms"
+            metrics = "RX 0.0 FPS  |  AGE -- ms"
+        if snap.resolution:
+            metrics += f"  |  {snap.resolution}"
+        self.video_metrics_text.value = metrics
 
-        self._safe_control_update(
-            self.video_status_overlay, "video_status_overlay.update"
-        )
+        self.video_state_text.value = f"● {snap.label}"
+        self.video_state_text.color = snap.color
+        self.video_summary_text.value = snap.summary()
+        self.video_origin_text.value = snap.origin_text
+        self.video_reason_text.value = f"Motivo: {snap.reason}" if snap.reason else ""
+        self.video_reason_text.visible = bool(snap.reason)
+        self.video_diag_text.value = "\n".join([
+            f"Fuente: {snap.source or '—'}",
+            f"Protocolo: {snap.protocol} · códec: {snap.codec or '—'}",
+            f"Título del flujo: {snap.title or '—'}",
+            f"Fotogramas recibidos: {snap.frames} · intentos de conexión: {snap.attempts}",
+            f"Antigüedad máx. para 'En directo': {self.active_profile.timeouts.video_stale_s:.1f} s",
+            f"Último error: {snap.last_error or '—'}",
+        ])
+        self._safe_control_update(self.video_status_overlay, "video_status_overlay.update")
+        self._safe_control_update(self.video_panel, "video_panel.update")
+
+    def _toggle_video_diagnostics(self, e=None):
+        self.video_diag_text.visible = not self.video_diag_text.visible
+        self.btn_video_diag.content = "Ocultar diagnóstico" if self.video_diag_text.visible else "Diagnóstico"
+        self._refresh_video_status(force=True)
 
     #async def _update_video_display_loop(self):
     #    while not self.closing:
@@ -1473,6 +1564,7 @@ class SafeFlightApp:
                     rx_times = tuple(_g_video_frame_times) 
 
                 now = time.monotonic()
+                self._refresh_video_status()
 
                 if frame is not None:
                     last_frame_time = now
@@ -1496,28 +1588,21 @@ class SafeFlightApp:
                         if self.drone_manager.link and self.drone_manager.link.vehicle:
                             vehicle = self.drone_manager.link.vehicle
 
-                            # HOME VR
-                            home_data = self.get_home_pixel_position(
-                                vehicle,
-                                self.drone_manager.home_location,
-                                target_w,
-                                target_h,
+                            # AR: HOME (pinhole projection, models/ArProjection.py)
+                            ar_pose = self._ar_pose(vehicle) if self.vr_enabled else None
+                            ar_att = self._ar_attitude(vehicle) if self.vr_enabled else None
+                            if self.vr_enabled:
+                                self._draw_ar_banner(frame, ar_pose is not None, ar_att)
+                            home = self.drone_manager.home_location
+                            # Relative frame: HOME is altitude 0 (same reference as the vehicle and waypoints).
+                            home_data = (
+                                arp.project(*ar_pose, home.lat, home.lon, 0.0, target_w, target_h,
+                                            self.ar_camera, ar_att)
+                                if ar_pose and home else None
                             )
-
-                            if home_data and self.vr_enabled:
-                                x, y, pitch_deg = home_data
-                                dist = self.get_distance_metres(
-                                    vehicle.location.global_relative_frame,
-                                    self.drone_manager.home_location,
-                                )
-
-                                y = max(10, min(target_h - 10, y))
-                                base_scale = 700
-                                calculated_radius = base_scale / max(1, dist)
-                                radius_x = int(max(15, min(200, calculated_radius)))
-                                squash_factor = abs(math.sin(math.radians(pitch_deg)))
-                                radius_y = int(radius_x * squash_factor)
-                                radius_y = max(3, radius_y)
+                            if home_data:
+                                x, y = home_data.x, home_data.y
+                                radius_x, radius_y = arp.marker_radii(home_data, 700, 15, 200, 3)
 
                                 cv2.ellipse(
                                     frame,
@@ -1554,7 +1639,7 @@ class SafeFlightApp:
                                 )
                                 cv2.putText(
                                     frame,
-                                    f"{int(dist)}m",
+                                    arp.distance_label(home_data),
                                     (x - 10, y + 30),
                                     cv2.FONT_HERSHEY_SIMPLEX,
                                     0.5,
@@ -1569,21 +1654,15 @@ class SafeFlightApp:
                                 and self.vr_enabled
                             ):
                                 for idx, wp in enumerate(self.current_trajectory.points, start=1):
-                                    pixdata = self.project_waypoint_to_pixel(
-                                        vehicle, wp, target_w, target_h
+                                    pixdata = (
+                                        arp.project(*ar_pose, wp.x, wp.y, wp.z, target_w, target_h,
+                                                    self.ar_camera, ar_att)
+                                        if ar_pose else None
                                     )
                                     if pixdata is None:
                                         continue
-
-                                    x, y, pitch_deg, dist = pixdata
-                                    y = max(10, min(target_h - 10, y))
-
-                                    base_scale = 900
-                                    calculated_radius = base_scale / max(1, dist)
-                                    radius_x = int(max(20, min(250, calculated_radius)))
-                                    squash_factor = abs(math.sin(math.radians(pitch_deg)))
-                                    radius_y = int(radius_x * squash_factor)
-                                    radius_y = max(5, radius_y)
+                                    x, y = pixdata.x, pixdata.y
+                                    radius_x, radius_y = arp.marker_radii(pixdata, 900, 20, 250, 5)
 
                                     cv2.ellipse(
                                         frame,
@@ -1642,7 +1721,7 @@ class SafeFlightApp:
                                     )
                                     cv2.putText(
                                         frame,
-                                        f"{dist:.0f}m",
+                                        arp.distance_label(pixdata),
                                         (x - 15, y + radius_y + 15),
                                         cv2.FONT_HERSHEY_SIMPLEX,
                                         0.5,
@@ -1653,29 +1732,6 @@ class SafeFlightApp:
                     except Exception as vr_err:
                         print(f"Error overlay VR: {vr_err}")
 
-                    # FPS de recepción y antigüedad del fotograma decodificado.
-                    if frame_received_at is not None:
-                        current_time = time.monotonic()
-                        recent_times = [
-                            t for t in rx_times
-                            if current_time - t <= 2.0
-                        ]
-
-                        rx_fps = 0.0
-                        if len(recent_times) >= 2:
-                            elapsed = recent_times[-1] - recent_times[0]
-                            if elapsed > 0:
-                                rx_fps = (len(recent_times) - 1) / elapsed
-
-                        frame_age_ms = max(
-                            0.0,
-                            (current_time - frame_received_at) * 1000.0,
-                        )
-                        self._update_video_status_overlay(
-                            live=True,
-                            rx_fps=rx_fps,
-                            frame_age_ms=frame_age_ms,
-                        )
 
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(rgb)
@@ -1700,7 +1756,6 @@ class SafeFlightApp:
                     #    break
                     #await asyncio.sleep(0.066)
                 else:
-                    self._update_video_status_overlay(live=False)
                     target_w, target_h = self.video_display_size
                     black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
 
@@ -2795,91 +2850,6 @@ class SafeFlightApp:
         dlat = loc2.lat - loc1.lat
         dlong = loc2.lon - loc1.lon
         return math.sqrt((dlat * 111319.5) ** 2 + (dlong * 111319.5) ** 2)
-
-    def get_home_pixel_position(self, vehicle, home_loc, screen_width, screen_height):
-        if not home_loc or not vehicle.location.global_relative_frame:
-            return None
-
-        current_loc = vehicle.location.global_relative_frame
-        dist = self.get_distance_metres(current_loc, home_loc)
-        if dist < 5.0:
-            return None
-
-        dlat = home_loc.lat - current_loc.lat
-        dlon = home_loc.lon - current_loc.lon
-
-        angle_to_home = math.atan2(dlon, dlat)
-        angle_to_home_deg = math.degrees(angle_to_home) % 360
-        diff_angle = (angle_to_home_deg - vehicle.heading + 180) % 360 - 180
-
-        fov_x = 80
-
-        if abs(diff_angle) < fov_x / 2:
-            x_pos = (diff_angle / (fov_x / 2)) * (screen_width / 2) + (screen_width / 2)
-
-            fov_y = 60
-            rel_alt = current_loc.alt - home_loc.alt
-
-            if dist > 0:
-                pitch_angle = math.degrees(math.atan2(rel_alt, dist))
-            else:
-                pitch_angle = 90
-
-            y_pos = (pitch_angle / (fov_y / 2)) * (screen_height / 2) + (screen_height / 2)
-
-            return int(x_pos), int(y_pos), pitch_angle
-
-        return None
-
-    def project_waypoint_to_pixel(
-        self,
-        vehicle,
-        waypoint,
-        screen_w,
-        screen_h,
-        fovx_deg=80,
-        fovy_deg=60,
-    ):
-        """
-        Proyecta un waypoint 3D a coordenadas píxel.
-        Retorna (x, y, pitch_deg, dist) o None si está fuera FOV.
-        """
-        drone_loc = vehicle.location.global_relative_frame
-        if not drone_loc:
-            return None
-
-        dlat = waypoint.x - drone_loc.lat
-        dlon = waypoint.y - drone_loc.lon
-        dx = dlat * 111319.5
-        dy = dlon * 111319.5 * math.cos(math.radians(drone_loc.lat))
-        dz = waypoint.z - drone_loc.alt
-
-        dist_xy = math.sqrt(dx**2 + dy**2)
-        if dist_xy < 0.5:
-            return None
-
-        dist_3d = math.sqrt(dist_xy**2 + dz**2)
-
-        angle_to_wp_rad = math.atan2(dy, dx)
-        angle_to_wp_deg = math.degrees(angle_to_wp_rad)
-
-        drone_heading_deg = vehicle.heading
-        rel_angle_deg = angle_to_wp_deg - drone_heading_deg
-        rel_angle_deg = (rel_angle_deg + 180) % 360 - 180
-
-        if abs(rel_angle_deg) > fovx_deg / 2:
-            return None
-
-        x = int((rel_angle_deg / (fovx_deg / 2)) * (screen_w / 2) + screen_w / 2)
-
-        pitch_angle_deg = math.degrees(math.atan2(dz, dist_xy))
-
-        if abs(pitch_angle_deg) > fovy_deg / 2:
-            return None
-
-        y = int((pitch_angle_deg / (fovy_deg / 2)) * (screen_h / 2) + screen_h / 2)
-
-        return (x, y, pitch_angle_deg, dist_3d)
 
     def _ui_gone(self, origin: str, exc: Exception | None = None):
         if self.closing:

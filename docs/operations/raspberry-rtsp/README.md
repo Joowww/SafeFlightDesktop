@@ -30,8 +30,13 @@ Terminal 2 — publicación de la cámara (1280×720 a 30 FPS, sin recodificar):
 ```bash
 rpicam-vid -t 0 -n --width 1280 --height 720 --framerate 30 --codec h264 --inline --intra 30 -o - \
   | ffmpeg -hide_banner -loglevel warning -framerate 30 -f h264 -i pipe:0 -an -c:v copy \
-      -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/cam
+      -metadata title="rpicam-vid IMX708" -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/cam
 ```
+
+`-metadata title=...` declara el origen del flujo: las versiones de SafeFlight Desktop posteriores
+al 24/11 muestran «Origen declarado: cámara («rpicam-vid IMX708») · no verificado». El título es una
+declaración del emisor, no una prueba de que el vídeo venga de la cámara. Sin título el panel indica
+«Origen desconocido»; el nombre del perfil nunca se usa para el origen.
 
 La cámara solo puede tener **un** proceso: detener antes cualquier `rpicam-vid` que envíe RTP al
 MSI (`pgrep -af rpicam-vid`).
