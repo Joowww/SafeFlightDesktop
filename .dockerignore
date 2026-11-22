@@ -8,3 +8,12 @@ main_production.py
 main.py
 App_tkinter.py
 
+
+# Not part of the web image
+android/
+docs/
+shared/
+tests/
+build/
+dist/
+packaging/

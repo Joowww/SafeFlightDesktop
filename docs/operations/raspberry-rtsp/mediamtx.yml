@@ -1,0 +1,28 @@
+# MediaMTX configuration for the Raspberry Pi camera (SafeFlight lab tests).
+#
+# Temporary use only: started by hand in a terminal, no system service, no
+# changes to the network configuration. Only RTSP is enabled; every other
+# protocol, the API and metrics are disabled.
+#
+# Publish:  rpicam-vid ... | ffmpeg ... -f rtsp rtsp://127.0.0.1:8554/cam
+# Play:     rtsp://<RASPBERRY_IP>:8554/cam   (SafeFlight Desktop and Android)
+
+logLevel: info
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp, udp]
+
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+api: no
+metrics: no
+pprof: no
+playback: no
+moq: no
+
+paths:
+  cam:
+    source: publisher

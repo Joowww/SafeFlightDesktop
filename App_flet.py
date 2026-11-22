@@ -36,7 +36,20 @@ from PIL import Image, ImageDraw
 from dronekit import VehicleMode
 
 from models.DroneManager import DroneManager
+from models import CommandGuard as cg
 from models.Trajectory import Trajectory
+from models.AppPaths import resource_dir, user_config_dir
+from models.MapView import MapFollower, MapViewStore, vehicle_position
+from models import VideoStatus as vstatus
+from models import ArProjection as arp
+from models.AppLogging import active_log_path, start_session_log
+from models.ConnectionProfiles import (
+    ConnectionProfile,
+    ProfileStore,
+    redact_url,
+    write_runtime_sdp,
+)
+from ui.ConnectionProfilesPanel import ConnectionProfilesPanel
 import argparse
 
 
@@ -47,12 +60,37 @@ _g_video_thread_running = False
 _g_video_thread = None
 _g_video_frame_times = collections.deque(maxlen=120)
 _g_video_last_frame_at = None
+# Video source shared by the receiver thread. Changing the generation makes
+# the receiver drop the current stream and open the new source.
+_g_stream_sdp = None
+_g_stream_generation = 0
+_g_rtsp_transport = "tcp"
+_g_video_reconnect_s = 1.0
+# What the receiver actually observes (attempts, stream, frames, errors).
+_g_video_status = vstatus.VideoStatusTracker()
 
+
+def _set_global_video_source(source, rtsp_transport="tcp", reconnect_s=1.0):
+    """Publish a new video source (SDP path, RTSP URL or None)."""
+    global _g_stream_sdp, _g_stream_generation, _g_rtsp_transport, _g_video_reconnect_s
+    global _g_latest_frame, _g_video_last_frame_at
+    with _g_frame_lock:
+        _g_stream_sdp = source
+        _g_rtsp_transport = rtsp_transport if rtsp_transport in ("tcp", "udp") else "tcp"
+        _g_video_reconnect_s = max(0.2, float(reconnect_s))
+        _g_stream_generation += 1
+        is_rtsp = bool(source) and str(source).startswith(("rtsp://", "rtsps://"))
+        protocol = None if not source else (f"RTSP/{_g_rtsp_transport.upper()}" if is_rtsp else "RTP/UDP")
+        _g_video_status.set_source(_g_stream_generation, protocol,
+                                   redact_url(source) if is_rtsp else source)
+        _g_latest_frame = None
+        _g_video_last_frame_at = None
+        _g_video_frame_times.clear()
 
 
 def _global_video_worker():
     global _g_latest_frame, _g_video_thread_running
-    global _g_stream_sdp, _g_video_last_frame_at    
+    global _g_stream_sdp, _g_video_last_frame_at
 
     print("[GLOBAL VIDEO] Iniciando receptor PyAV...", flush=True)
 
@@ -61,18 +99,28 @@ def _global_video_worker():
     }
 
     while _g_video_thread_running:
-        if not _g_stream_sdp:
-            time.sleep(1)
+        with _g_frame_lock:
+            source = _g_stream_sdp
+            generation = _g_stream_generation
+            rtsp_transport = _g_rtsp_transport
+            reconnect_s = _g_video_reconnect_s
+        if not source:
+            time.sleep(0.5)
             continue
 
         try:
-            is_rtsp = _g_stream_sdp.startswith("rtsp://")
-            source_type = "RTSP/TCP" if is_rtsp else "RTP/UDP"
-            print(f"[GLOBAL VIDEO] Esperando señal {source_type}...", flush=True)
-            source_options = {"rtsp_transport": "tcp"} if is_rtsp else options
+            is_rtsp = source.startswith(("rtsp://", "rtsps://"))
+            source_type = f"RTSP/{rtsp_transport.upper()}" if is_rtsp else "RTP/UDP"
+            print(
+                f"[GLOBAL VIDEO] Esperando señal {source_type} "
+                f"({redact_url(source) if is_rtsp else source})...",
+                flush=True,
+            )
+            source_options = {"rtsp_transport": rtsp_transport} if is_rtsp else options
+            _g_video_status.attempt_started(generation)
 
             with av.open(
-                _g_stream_sdp,
+                source,
                 mode="r",
                 format="rtsp" if is_rtsp else "sdp",
                 options=source_options,
@@ -80,18 +128,30 @@ def _global_video_worker():
             ) as container:
 
                 first_frame_received = False
+                try:
+                    _stream = container.streams.video[0]
+                    _g_video_status.stream_opened(
+                        generation, _stream.codec_context.name, container.metadata.get("title"))
+                except Exception:
+                    _g_video_status.stream_opened(generation, None, None)
 
                 for decoded_frame in container.decode(video=0):
                     if not _g_video_thread_running:
+                        break
+                    if generation != _g_stream_generation:
+                        print("[GLOBAL VIDEO] Fuente cambiada; reabriendo.", flush=True)
                         break
 
                     frame = decoded_frame.to_ndarray(format="bgr24")
                     received_at = time.monotonic()
 
                     with _g_frame_lock:
+                        if generation != _g_stream_generation:
+                            break
                         _g_latest_frame = frame
                         _g_video_last_frame_at = received_at
                         _g_video_frame_times.append(received_at)
+                    _g_video_status.frame(generation, frame.shape[1], frame.shape[0], received_at)
 
                     if not first_frame_received:
                         print(
@@ -101,13 +161,15 @@ def _global_video_worker():
                         )
                         first_frame_received = True
 
-                if _g_video_thread_running:
+                if _g_video_thread_running and generation == _g_stream_generation:
+                    _g_video_status.stream_ended(generation)
                     print(
                         "[GLOBAL VIDEO] Flujo interrumpido.",
                         flush=True,
                     )
 
         except Exception as exc:
+            _g_video_status.attempt_failed(generation, exc)
             if _g_video_thread_running:
                 print(
                     "[GLOBAL VIDEO] Sin señal o error: "
@@ -115,8 +177,8 @@ def _global_video_worker():
                     flush=True,
                 )
 
-        if _g_video_thread_running:
-            time.sleep(1)
+        if _g_video_thread_running and generation == _g_stream_generation:
+            time.sleep(reconnect_s)
 
     print("[GLOBAL VIDEO] Receptor detenido.", flush=True)
 
@@ -217,25 +279,27 @@ class SafeFlightApp:
         # ----------------------------------------------------
         # RECURSOS
         # ----------------------------------------------------
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.base_dir = str(resource_dir())
         self.assets_dir = os.path.join(self.base_dir, "assets")
         self.icon_path = os.path.join(self.assets_dir, "drone_icon.png")
 
-        # La configuración del vídeo pertenece al usuario, no al ejecutable.
-        # Esto también funciona con la distribución PyInstaller --onedir.
-        self.video_config_dir = os.path.join(
-            os.environ.get("APPDATA") or os.path.expanduser("~"),
-            "SafeFlightDesktop",
-        )
-        self.video_config_path = os.path.join(
-            self.video_config_dir, "video_settings.json"
-        )
-        self.video_udp_port = self._load_video_udp_port()
-        self.video_mode, self.rtsp_url = self._load_video_stream_mode()
-        self.stream_sdp = (
-            self.rtsp_url
-            if self.video_mode == "rtsp"
-            else self._prepare_runtime_sdp(self.video_udp_port)
+        # La configuración pertenece al usuario, no al ejecutable:
+        # %APPDATA% (Windows), ~/Library/Application Support (macOS)
+        # o ~/.config (Linux). Ver models/AppPaths.py.
+        self.video_config_dir = str(user_config_dir())
+
+        # Perfiles de conexión (SIYI / 5G-VPN / SITL / personalizados).
+        self.profile_store = ProfileStore().load()
+        for warning in self.profile_store.warnings:
+            print(f"[PROFILES] {warning}")
+        self.active_profile = self.profile_store.active
+        self.connected_profile_id = None
+        self.stream_sdp = self._stream_source_for(self.active_profile)
+        print(
+            f"[PROFILES] Perfil activo: {self.active_profile.name} | "
+            f"MAVLink {self.active_profile.mavlink_connection_string()} | "
+            f"Vídeo {self.active_profile.video_summary()} | "
+            f"Archivo {self.profile_store.path}"
         )
 
         try:
@@ -258,16 +322,21 @@ class SafeFlightApp:
         self.last_heading = -1
         self.altitude_history: List[float] = []
         self.is_video_main = False
-        self.map_follow_drone = True
-        self.map_initialized = False
-        self.last_centered_pos = None
+        # Map view: saved operator view or world view; vehicle GPS only when trustworthy.
+        self.map_view_store = MapViewStore().load()
+        if self.map_view_store.warning:
+            print(f"[MAPA] {self.map_view_store.warning}", flush=True)
+        _view = self.map_view_store.initial_view()
+        self.map_follower = MapFollower(follow=True)
+        self.map_current_view = (_view.lat, _view.lon, _view.zoom)
         self.drone_icon_container = None
-        self.last_known_lat = 41.3874
-        self.last_known_lon = 2.1686
         self._pressed_keys: set = set()
    
         
         self.vr_enabled = False
+        self.ar_camera, _ar_warning = arp.load_camera()
+        if _ar_warning:
+            print(f"[AR] {_ar_warning}", flush=True)
         self.current_trajectory = Trajectory("test_trajectory")
         self.trajectory_path = None
         self.trajectory_markers = []
@@ -285,6 +354,8 @@ class SafeFlightApp:
         
         self.takeoff_thread = None
         self.takeoff_stop_event = threading.Event()
+        # Flight state shown by the TAKEOFF button (Flet 0.82 Button has no `text`).
+        self._ui_flying = False
         
         self.connection_thread = None
         self.connection_stop_event = threading.Event()
@@ -394,16 +465,65 @@ class SafeFlightApp:
         self.pressed_keys.discard(key)
         self._push_keys_to_controller()
         
-    async def _initialize_map_at_drone(self, lat, lon):
-        await asyncio.sleep(0.3)
+    async def _move_map_to(self, view):
+        """Moves the map camera; failures (map not mounted yet) are retried on the next update."""
         try:
-            await self.map_widget.center_on(
-                point=fmap.MapLatitudeLongitude(lat, lon),
-                zoom=19,
-            )
-            self.map_initialized = True
+            await self.map_widget.center_on(point=fmap.MapLatitudeLongitude(view.lat, view.lon), zoom=view.zoom)
+            self.map_current_view = (view.lat, view.lon, view.zoom)
+            return True
         except Exception:
-            pass
+            return False
+
+    def _preserve_map_view(self):
+        """The map widget is rebuilt when panels move: reopen it on the current view."""
+        lat, lon, zoom = self.map_current_view
+        self.map_widget.initial_center = fmap.MapLatitudeLongitude(lat, lon)
+        self.map_widget.initial_zoom = zoom
+
+    def _on_map_position_change(self, e):
+        try:
+            self.map_current_view = (e.coordinates.latitude, e.coordinates.longitude, e.camera.zoom)
+        except Exception:
+            return
+        if getattr(e, "has_gesture", False) and self.map_follower.user_moved_map():
+            self.follow_drone_switch.value = False
+            self._update_map_source_text("Seguimiento desactivado al mover el mapa")
+            self._safe_page_update()
+
+    def _update_map_source_text(self, extra=None):
+        if self.map_follower.last_position is not None:
+            source = "posición del dron (GPS 3D)"
+        elif self.map_view_store.saved is not None:
+            source = "vista inicial guardada"
+        else:
+            source = "vista mundial (sin GPS válido del dron)"
+        self.map_source_text.value = f"Mapa: {source}" + (f" · {extra}" if extra else "")
+
+    async def _on_follow_drone_change(self, e):
+        view = self.map_follower.set_follow(bool(self.follow_drone_switch.value))
+        if self.follow_drone_switch.value and view is None:
+            self._update_map_source_text("se centrará con el primer GPS 3D válido")
+        else:
+            self._update_map_source_text()
+        if view is not None:
+            await self._move_map_to(view)
+        self._safe_page_update()
+
+    async def _save_map_view(self, e=None):
+        try:
+            camera = await self.map_widget.get_camera()
+            view = self.map_view_store.save_view(camera.center.latitude, camera.center.longitude, camera.zoom)
+        except Exception as exc:
+            self._show_message(f"No se pudo guardar la vista del mapa: {exc}", error=True)
+            return
+        print(f"[MAPA] Vista inicial guardada: {view.lat:.6f}, {view.lon:.6f} · zoom {view.zoom:.1f}", flush=True)
+        self._update_map_source_text()
+        self._show_message("Vista guardada como ubicación inicial del mapa.")
+
+    def _clear_map_view(self, e=None):
+        self.map_view_store.clear()
+        self._update_map_source_text()
+        self._show_message("Vista inicial eliminada: el mapa abrirá en la vista mundial sin GPS del dron.")
         
         
     def _on_page_disconnect(self, e):
@@ -456,13 +576,29 @@ class SafeFlightApp:
     # UI BUILDERS
     # ========================================================
     def _build_sidebar(self):
+        self.profile_dropdown = ft.Dropdown(
+            label="Perfil de conexión",
+            value=self.active_profile.id,
+            dense=True,
+            options=self._profile_options(),
+            on_select=self._on_profile_selected,
+        )
         self.conn_entry = ft.TextField(
-            value="udpin:0.0.0.0:14560",
-            read_only= True if self.page.web else False,
+            label="MAVLink",
+            value=self.active_profile.mavlink_connection_string(),
+            read_only=True,
             dense=True,
             border_radius=10,
             bgcolor="#1b1b1b",
             color="white",
+        )
+        self.btn_edit_profiles = ft.TextButton(
+            "Editar perfiles…",
+            on_click=self._open_profiles_panel,
+            disabled=bool(self.page.web),
+        )
+        self.link_status_text = ft.Text(
+            "MAVLink: sin conexión", size=12, color="#aaaaaa"
         )
 
         self.speed_value_text = ft.Text("1.0 m/s", color="#3b8ed0", size=13)
@@ -495,13 +631,16 @@ class SafeFlightApp:
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
         )
 
+        # Keyboard control sends velocity setpoints: only selectable during an
+        # authorised control session (CommandGuard also blocks it at the link).
+        self.radio_keyboard = ft.Radio(value=DroneManager.CONTROL_KEYBOARD, label="Keyboard", disabled=True)
         self.controlmode_radio = ft.RadioGroup(
             value=DroneManager.CONTROL_TRAJECTORY,
             on_change=self.on_control_mode_change,
             content=ft.Column(
                 spacing=2,
                 controls=[
-                    ft.Radio(value=DroneManager.CONTROL_KEYBOARD, label="Keyboard"),
+                    self.radio_keyboard,
                     ft.Radio(value=DroneManager.CONTROL_TRAJECTORY, label="Trajectory"),
                 ],
             ),
@@ -526,6 +665,21 @@ class SafeFlightApp:
             on_click=self._land_action,
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
         )
+
+        self.btn_rtl = ft.Button(
+            "RTL",
+            disabled=True,
+            bgcolor="#8e44ad",
+            color="white",
+            on_click=self._rtl_action,
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+        )
+        self.control_status_text = ft.Text(
+            "SOLO MONITORIZACIÓN · comandos bloqueados", size=12, color="#f0b429",
+            weight=ft.FontWeight.BOLD,
+        )
+        self.btn_authorize = ft.TextButton("Autorizar control…", on_click=self._open_authorize_dialog, disabled=True)
+        self.btn_revoke = ft.TextButton("Revocar", on_click=self._revoke_session, disabled=True)
 
         self.traj_switch = ft.Switch(
             label="Create trajectory",
@@ -563,47 +717,59 @@ class SafeFlightApp:
             
         )
 
+        self.follow_drone_switch = ft.Switch(
+            label="Seguir dron",
+            value=True,
+            on_change=self._on_follow_drone_change,
+        )
+        self.btn_save_map_view = ft.TextButton(
+            "Guardar esta vista como ubicación inicial",
+            on_click=self._save_map_view,
+        )
+        self.btn_clear_map_view = ft.TextButton(
+            "Olvidar vista guardada",
+            on_click=self._clear_map_view,
+        )
+        self.map_source_text = ft.Text("", color="#aaaaaa", size=11)
+        self._update_map_source_text()
+
+        self.ar_info_text = ft.Text(self._ar_info(), color="#aaaaaa", size=10)
         self.vr_switch = ft.Switch(
-            label="VR Origen",
+            label="Realidad aumentada (AR)",
             value=False,
             on_change=self._on_vr_switch_change,
         )
 
-        self.video_port_field = ft.TextField(
-            label="Puerto RTP local (UDP)",
-            value=str(self.video_udp_port),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            dense=True,
-            max_length=5,
-            border_radius=10,
-            bgcolor="#1b1b1b",
-            color="white",
-        )
-        self.video_use_rtsp_switch = ft.Switch(
-            label="Usar RTSP (MK32 / MediaMTX)",
-            value=(self.video_mode == "rtsp"),
-        )
-        self.video_rtsp_url_field = ft.TextField(
-            label="URL RTSP (servidor en Raspberry)",
-            value=self.rtsp_url,
-            dense=True,
-            border_radius=10,
-            bgcolor="#1b1b1b",
-            color="white",
-        )
-        self.video_port_save_button = ft.Button(
-            "Guardar vídeo (reiniciar)",
-            on_click=self._save_video_port_setting,
-        )
-        current_video_source = (
-            "RTSP: " + self.rtsp_url
-            if self.video_mode == "rtsp"
-            else f"RTP/UDP: {self.video_udp_port}"
-        )
         self.video_port_info_text = ft.Text(
-            f"Fuente en uso: {current_video_source}. Cambios al reiniciar.",
+            f"Fuente en uso: {self.active_profile.video_summary()}",
             color="#aaaaaa",
             size=11,
+        )
+        self.video_state_text = ft.Text("● Conectando", color="#facc15", size=13, weight=ft.FontWeight.BOLD)
+        self.video_summary_text = ft.Text("—", color="#dddddd", size=12)
+        self.video_origin_text = ft.Text("Origen desconocido (sin flujo)", color="#aaaaaa", size=11)
+        self.video_reason_text = ft.Text("", color="#fb923c", size=11, visible=False)
+        self.video_diag_text = ft.Text("", color="#9ca3af", size=10, selectable=True, visible=False)
+        self.btn_video_diag = ft.TextButton("Diagnóstico", on_click=self._toggle_video_diagnostics)
+        self.video_panel = ft.Column(
+            spacing=3,
+            controls=[
+                self.video_state_text,
+                self.video_summary_text,
+                self.video_origin_text,
+                self.video_reason_text,
+                self.video_port_info_text,
+                ft.Text("Se cambia en el perfil (Editar perfiles…).", color="#777777", size=10),
+                self.btn_video_diag,
+                self.video_diag_text,
+            ],
+        )
+        log_path = active_log_path()
+        self.log_path_text = ft.Text(
+            f"Log: {log_path}" if log_path else "Log: solo consola",
+            color="#777777",
+            size=10,
+            selectable=True,
         )
 
         self.sidebar = ft.Container(
@@ -615,8 +781,11 @@ class SafeFlightApp:
                 spacing=10,
                 controls=[
                     ft.Text("SAFEFLIGHT", size=22, weight=ft.FontWeight.BOLD),
+                    self.profile_dropdown,
                     self.conn_entry,
+                    self.btn_edit_profiles,
                     self.btn_connect,
+                    self.link_status_text,
                     ft.Divider(color="#333333"),
                     ft.Text(
                         "MISSION SETTINGS",
@@ -637,9 +806,11 @@ class SafeFlightApp:
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
+                    self.control_status_text,
+                    ft.Row([self.btn_authorize, self.btn_revoke], spacing=4, wrap=True),
                     self.controlmode_radio,
                     self.btn_takeoff,
-                    self.btn_land,
+                    ft.Row([self.btn_land, self.btn_rtl], spacing=8),
                     ft.Divider(color="#333333"),
                     ft.Text(
                         "TRAJECTORY COMMANDS",
@@ -655,24 +826,33 @@ class SafeFlightApp:
                     self.btn_clear_traj,
                     ft.Divider(color="#333333"),
                     ft.Text(
+                        "MAPA",
+                        size=12,
+                        weight=ft.FontWeight.BOLD,
+                        color="gray",
+                    ),
+                    self.follow_drone_switch,
+                    self.map_source_text,
+                    self.btn_save_map_view,
+                    self.btn_clear_map_view,
+                    ft.Divider(color="#333333"),
+                    ft.Text(
                         "APP SETTINGS",
                         size=12,
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
                     self.vr_switch,
+                    self.ar_info_text,
                     ft.Divider(color="#333333"),
                     ft.Text(
-                        "VIDEO INPUT (RTP / RTSP)",
+                        "VÍDEO",
                         size=12,
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
-                    self.video_use_rtsp_switch,
-                    self.video_port_field,
-                    self.video_rtsp_url_field,
-                    self.video_port_save_button,
-                    self.video_port_info_text,
+                    self.video_panel,
+                    self.log_path_text,
                 ],
             ),
         )
@@ -699,8 +879,8 @@ class SafeFlightApp:
         # Indicador independiente del fotograma: mantiene su tamaño en
         # la vista previa pequeña y en la vista principal.
         self.video_status_text = ft.Text(
-            "● SIGNAL LOST",
-            color="#fb7185",
+            "● CONECTANDO",
+            color="#facc15",
             size=11,
             weight=ft.FontWeight.BOLD,
             no_wrap=True,
@@ -727,7 +907,6 @@ class SafeFlightApp:
             ),
         )
         self._video_status_last_update = 0.0
-        self._video_status_live = False
 
         self.video_container_big = ft.Container(
             bgcolor="black",
@@ -768,13 +947,14 @@ class SafeFlightApp:
         
         self.map_widget = fmap.Map(
             expand=True,
-            initial_center=fmap.MapLatitudeLongitude(41.3874, 2.1686),
-            initial_zoom=18,
+            initial_center=fmap.MapLatitudeLongitude(self.map_current_view[0], self.map_current_view[1]),
+            initial_zoom=self.map_current_view[2],
             interaction_configuration=fmap.InteractionConfiguration(
                 flags=fmap.InteractionFlag.ALL,
                 keyboard_configuration=fmap.KeyboardConfiguration(autofocus=False, enable_arrow_keys_panning=False, enable_wasd_panning=False),
             ),
             on_tap=self._map_left_click_add_point,
+            on_position_change=self._on_map_position_change,
             #on_event=self._map_event_fallback,
             layers=self.map_layers,
         )
@@ -976,10 +1156,19 @@ class SafeFlightApp:
             ],
         )
 
+        self.profiles_panel = ConnectionProfilesPanel(
+            store=self.profile_store,
+            on_saved=self._on_profile_saved,
+            on_message=lambda msg, err: self._show_message(msg, error=err),
+            on_update=self._safe_page_update,
+        )
+
         self.root = ft.Stack(
             expand=True,
             controls=[
                 self.root_content,   # ← solo esto, sin el kb_listener aquí
+                self.profiles_panel.container,
+                self._build_authorize_dialog(),
             ],
         )
 
@@ -994,8 +1183,12 @@ class SafeFlightApp:
         self._shutdown_done = False
         self._kb_thread_running = True
 
-        global _g_stream_sdp, _g_video_thread_running, _g_video_thread
-        _g_stream_sdp = self.stream_sdp
+        global _g_video_thread_running, _g_video_thread
+        _set_global_video_source(
+            self.stream_sdp,
+            self.active_profile.video.rtsp_transport,
+            self.active_profile.timeouts.video_reconnect_interval_s,
+        )
         if not _g_video_thread_running:
             _g_video_thread_running = True
             _g_video_thread = threading.Thread(target=_global_video_worker, daemon=True)
@@ -1023,19 +1216,7 @@ class SafeFlightApp:
             return
         self.sidebar_visible = not self.sidebar_visible
         self.sidebar.visible = self.sidebar_visible
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self.btn_toggle_sidebar.style = ft.ButtonStyle(
             bgcolor="#3b8ed0" if self.sidebar_visible else "#1e1e2e",
             color="white",
@@ -1048,19 +1229,7 @@ class SafeFlightApp:
             return
         self.telemetry_visible = not self.telemetry_visible
         self.telemetry_frame.visible = self.telemetry_visible
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self.btn_toggle_telemetry.style = ft.ButtonStyle(
             bgcolor="#3b8ed0" if self.telemetry_visible else "#1e1e2e",
             color="white",
@@ -1102,19 +1271,7 @@ class SafeFlightApp:
         if self.closing:
             return
         self.is_video_main = not self.is_video_main
-        try:
-            vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
-            if vehicle:
-                loc = vehicle.location.global_relative_frame
-                if loc and loc.lat is not None and loc.lon is not None:
-                    self.last_known_lat = loc.lat
-                    self.last_known_lon = loc.lon
-        except Exception:
-            pass 
-        self.map_widget.initial_center = fmap.MapLatitudeLongitude(
-            self.last_known_lat, self.last_known_lon
-        )
-        self.map_widget.initial_zoom = 19
+        self._preserve_map_view()
         self._arrange_views()
 
 
@@ -1158,125 +1315,143 @@ class SafeFlightApp:
     def _on_vr_switch_change(self, e):
         self.vr_enabled = bool(e.control.value)
 
-    # ========================================================
-    # VIDEO CONFIGURATION (WINDOWS DESKTOP)
-    # ========================================================
-    def _load_video_udp_port(self) -> int:
-        """Carga el puerto RTP desde la configuración del usuario."""
-        default_port = 5004
-        try:
-            with open(self.video_config_path, "r", encoding="utf-8") as config_file:
-                settings = json.load(config_file)
-            port = int(settings.get("rtp_udp_port", default_port))
-            if 1024 <= port <= 65534:
-                return port
-            print("[VIDEO CONFIG] Puerto fuera de rango; usando 5004.")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            print(f"[VIDEO CONFIG] No se pudo leer configuración: {exc}")
-        return default_port
+    def _ar_info(self):
+        cam = self.ar_camera
+        text = f"Mostrar Home y puntos de misión sobre el vídeo. {cam.describe()}."
+        if not cam.calibrated:
+            text += " Posiciones APROXIMADAS (distancias con «~»)."
+        elif not cam.stabilized:
+            text += " Aproximadas también si falta la actitud del dron o hay alabeo > 5°."
+        return text
 
-    def _load_video_stream_mode(self) -> tuple[str, str]:
-        """Carga el tipo de fuente sin alterar la configuración RTP previa."""
-        default_url = "rtsp://192.168.144.30:8554/raspicam"
-        try:
-            with open(self.video_config_path, "r", encoding="utf-8") as handle:
-                settings = json.load(handle)
-            mode = settings.get("video_mode", "rtp")
-            url = settings.get("rtsp_url", default_url)
-            if mode not in ("rtp", "rtsp"):
-                mode = "rtp"
-            if not isinstance(url, str) or not self._valid_rtsp_url(url):
-                url = default_url
-            return mode, url
-        except FileNotFoundError:
-            return "rtp", default_url
-        except Exception as exc:
-            print(f"[VIDEO CONFIG] No se pudo leer modo: {exc}")
-            return "rtp", default_url
+    def _ar_pose(self, vehicle):
+        """(lat, lon, alt_rel, heading) only with a recent 3D fix; otherwise nothing is drawn."""
+        loc = vehicle.location.global_relative_frame
+        if loc is None or vehicle.heading is None:
+            return None
+        fix = vehicle.gps_0.fix_type if vehicle.gps_0 else None
+        if vehicle_position(loc.lat, loc.lon, fix, self.drone_manager.gps_position_age_s()) is None:
+            return None
+        return loc.lat, loc.lon, loc.alt or 0.0, float(vehicle.heading)
 
     @staticmethod
-    def _valid_rtsp_url(url: str) -> bool:
-        if not isinstance(url, str) or len(url) > 1024:
-            return False
-        try:
-            parts = urlsplit(url.strip())
-            return (
-                parts.scheme == "rtsp"
-                and bool(parts.hostname)
-                and (parts.port is None or 1 <= parts.port <= 65535)
-                and not any(c in url for c in ("\n", "\r", "\t"))
-            )
-        except ValueError:
-            return False
+    def _ar_attitude(vehicle):
+        """(pitch_deg, roll_deg) of the vehicle, or None when not received."""
+        att = getattr(vehicle, "attitude", None)
+        if att is None or att.pitch is None or att.roll is None:
+            return None
+        return math.degrees(att.pitch), math.degrees(att.roll)
 
-    def _prepare_runtime_sdp(self, port: int) -> str:
-        """Escribe un SDP reproducible en AppData, no en la carpeta de la app."""
-        sdp_path = os.path.join(self.video_config_dir, "stream_runtime.sdp")
-        sdp_text = (
-            "v=0\n"
-            "o=- 0 0 IN IP4 0.0.0.0\n"
-            "s=SafeFlight Desktop RTP receiver\n"
-            "c=IN IP4 0.0.0.0\n"
-            "t=0 0\n"
-            "a=tool:SafeFlightDesktop\n"
-            f"m=video {port} RTP/AVP 96\n"
-            "a=rtpmap:96 H264/90000\n"
-            "a=fmtp:96 packetization-mode=1\n"
-            "a=recvonly\n"
-        )
+    def _draw_ar_banner(self, frame, has_pose, attitude=None):
+        reason = arp.accuracy(self.ar_camera, attitude)
+        if not has_pose:
+            label, color = "AR: SIN POSICION GPS VALIDA", (0, 0, 255)
+        elif reason == "cámara sin calibrar":
+            label, color = "AR APROXIMADA: CAMARA SIN CALIBRAR", (0, 200, 255)
+        elif reason:
+            label, color = "AR APROXIMADA: ORIENTACION DE CAMARA NO FIABLE", (0, 200, 255)
+        else:
+            label, color = "AR", (0, 255, 0)
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        x0 = frame.shape[1] - tw - 16
+        cv2.rectangle(frame, (x0 - 6, 8), (x0 + tw + 6, 8 + th + 12), (0, 0, 0), -1)
+        cv2.putText(frame, label, (x0, 8 + th + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+    # ========================================================
+    # CONNECTION PROFILES / VIDEO SOURCE
+    # ========================================================
+    def _profile_options(self):
+        return [
+            ft.DropdownOption(key=p.id, text=p.name)
+            for p in self.profile_store.profiles
+        ]
+
+    def _stream_source_for(self, profile: ConnectionProfile):
+        """Devuelve la fuente para PyAV: URL RTSP, ruta SDP o None."""
+        video = profile.video
+        if video.mode == "rtsp":
+            return video.rtsp_url
+        if video.mode == "none":
+            return None
         try:
-            os.makedirs(self.video_config_dir, exist_ok=True)
-            with open(sdp_path, "w", encoding="ascii", newline="\n") as sdp_file:
-                sdp_file.write(sdp_text)
-            print(f"[VIDEO CONFIG] Escuchando RTP en UDP {port}")
-            return sdp_path
-        except OSError as exc:
+            return str(write_runtime_sdp(self.video_config_dir, video.rtp_udp_port))
+        except (OSError, ValueError) as exc:
             # No se intenta modificar el stream.sdp empaquetado.
-            print(f"[VIDEO CONFIG] No se pudo crear SDP en AppData: {exc}")
-            self.video_udp_port = 5004
+            print(f"[VIDEO CONFIG] No se pudo crear el SDP de usuario: {exc}")
             return os.path.join(self.base_dir, "stream.sdp")
 
-    def _save_video_port_setting(self, e=None):
-        """Guarda RTP o RTSP en AppData y pide reiniciar para aplicar cambios."""
+    def _apply_video_source(self, profile: ConnectionProfile):
+        self.stream_sdp = self._stream_source_for(profile)
+        _set_global_video_source(
+            self.stream_sdp,
+            profile.video.rtsp_transport,
+            profile.timeouts.video_reconnect_interval_s,
+        )
+        self.video_port_info_text.value = (
+            f"Fuente en uso: {profile.video_summary()}"
+        )
+        print(f"[VIDEO CONFIG] Fuente aplicada: {profile.video_summary()}")
+
+    def _mavlink_session_active(self) -> bool:
+        dm = self.drone_manager
+        return bool(dm and dm.link and dm.link.is_connected)
+
+    def _activate_profile(self, profile: ConnectionProfile):
+        """Aplica el perfil: vídeo inmediato; MAVLink en la próxima conexión."""
+        self.active_profile = profile
+        self.profile_dropdown.options = self._profile_options()
+        self.profile_dropdown.value = profile.id
+        self.conn_entry.value = profile.mavlink_connection_string()
+        self._apply_video_source(profile)
+        if (
+            self._mavlink_session_active()
+            and self.connected_profile_id is not None
+            and self.connected_profile_id != profile.id
+        ):
+            self._show_message(
+                "Vídeo actualizado. La sesión MAVLink actual se mantiene; "
+                "el nuevo endpoint se usará al reiniciar SafeFlight.",
+            )
+        self._safe_page_update()
+
+    def _on_profile_selected(self, e=None):
         if self.closing:
             return
-        raw = str(self.video_port_field.value or "").strip()
+        profile_id = str(self.profile_dropdown.value or "")
         try:
-            port = int(raw)
-        except ValueError:
-            self._show_message("Introduce un puerto UDP numérico.", error=True)
+            profile = self.profile_store.select(profile_id)
+            self.profile_store.save()
+        except (KeyError, OSError) as exc:
+            self._show_message(f"No se pudo seleccionar el perfil: {exc}", error=True)
             return
-        if not 1024 <= port <= 65534:
-            self._show_message("Puerto RTP fuera de rango (1024-65534).", error=True)
-            return
+        self._activate_profile(profile)
 
-        mode = "rtsp" if self.video_use_rtsp_switch.value else "rtp"
-        url = str(self.video_rtsp_url_field.value or "").strip()
-        if not self._valid_rtsp_url(url):
-            self._show_message("URL RTSP inválida; usa rtsp://IP:PUERTO/ruta.", error=True)
+    def _open_profiles_panel(self, e=None):
+        if self.closing:
             return
+        self._clear_keyboard_state()
+        self.profiles_panel.open(self.active_profile.id)
 
-        settings = {
-            "video_mode": mode,
-            "rtp_udp_port": port,
-            "rtsp_url": url,
-        }
+    def _on_profile_saved(self, profile: ConnectionProfile):
+        self._activate_profile(self.profile_store.active)
+        self._show_message(f"Perfil '{profile.name}' guardado y seleccionado.")
+
+    def _update_link_status(self, vehicle):
+        """Muestra el tiempo desde el último HEARTBEAT recibido."""
         try:
-            os.makedirs(self.video_config_dir, exist_ok=True)
-            temporary_path = self.video_config_path + ".tmp"
-            with open(temporary_path, "w", encoding="utf-8") as config_file:
-                json.dump(settings, config_file, indent=2)
-            os.replace(temporary_path, self.video_config_path)
-        except OSError as exc:
-            self._show_message(f"No se pudo guardar el vídeo: {exc}", error=True)
-            return
-
-        source = f"RTSP {url}" if mode == "rtsp" else f"RTP UDP {port}"
-        message = f"Guardado: {source}. Reinicia SafeFlight para aplicarlo."
-        print(f"[VIDEO CONFIG] {message}")
-        self._show_message(message)
+            age = vehicle.last_heartbeat if vehicle is not None else None
+        except Exception:
+            age = None
+        stale_after = self.active_profile.timeouts.telemetry_stale_s
+        if age is None:
+            text, color = "MAVLink: sin heartbeat", "#aaaaaa"
+        elif age <= stale_after:
+            text, color = f"MAVLink: OK · último heartbeat {age:.1f} s", "#4ade80"
+        else:
+            text, color = f"MAVLink: TELEMETRÍA OBSOLETA · {age:.1f} s", "#fb7185"
+        if self.link_status_text.value != text:
+            self.link_status_text.value = text
+            self.link_status_text.color = color
 
     # ========================================================
     # VIDEO
@@ -1325,33 +1500,46 @@ class SafeFlightApp:
         print("VIDEO: thread finalizado limpiamente")
             
 
-    def _update_video_status_overlay(self, live, rx_fps=0.0, frame_age_ms=None):
-        """Actualiza el indicador a un máximo de dos veces por segundo."""
+    def _refresh_video_status(self, force=False):
+        """Overlay and VÍDEO panel from what the receiver observed (max. 2 updates/s)."""
         now = time.monotonic()
-        if (
-            live == self._video_status_live
-            and now - self._video_status_last_update < 0.5
-        ):
+        if not force and now - self._video_status_last_update < 0.5:
             return
-
-        self._video_status_live = live
         self._video_status_last_update = now
+        snap = _g_video_status.snapshot(stale_s=self.active_profile.timeouts.video_stale_s)
 
-        if live:
-            age_text = "--" if frame_age_ms is None else f"{frame_age_ms:.0f}"
-            self.video_status_text.value = "● CAMERA LIVE"
-            self.video_status_text.color = "#4ade80"
-            self.video_metrics_text.value = (
-                f"RX {rx_fps:.1f} FPS  |  AGE {age_text} ms"
-            )
+        self.video_status_text.value = f"● {snap.label.upper()}"
+        self.video_status_text.color = snap.color
+        if snap.state == vstatus.LIVE:
+            age = "--" if snap.age_ms is None else f"{snap.age_ms:.0f}"
+            metrics = f"RX {snap.fps:.1f} FPS  |  AGE {age} ms"
         else:
-            self.video_status_text.value = "● SIGNAL LOST"
-            self.video_status_text.color = "#fb7185"
-            self.video_metrics_text.value = "RX 0.0 FPS  |  AGE -- ms"
+            metrics = "RX 0.0 FPS  |  AGE -- ms"
+        if snap.resolution:
+            metrics += f"  |  {snap.resolution}"
+        self.video_metrics_text.value = metrics
 
-        self._safe_control_update(
-            self.video_status_overlay, "video_status_overlay.update"
-        )
+        self.video_state_text.value = f"● {snap.label}"
+        self.video_state_text.color = snap.color
+        self.video_summary_text.value = snap.summary()
+        self.video_origin_text.value = snap.origin_text
+        self.video_reason_text.value = f"Motivo: {snap.reason}" if snap.reason else ""
+        self.video_reason_text.visible = bool(snap.reason)
+        self.video_diag_text.value = "\n".join([
+            f"Fuente: {snap.source or '—'}",
+            f"Protocolo: {snap.protocol} · códec: {snap.codec or '—'}",
+            f"Título del flujo: {snap.title or '—'}",
+            f"Fotogramas recibidos: {snap.frames} · intentos de conexión: {snap.attempts}",
+            f"Antigüedad máx. para 'En directo': {self.active_profile.timeouts.video_stale_s:.1f} s",
+            f"Último error: {snap.last_error or '—'}",
+        ])
+        self._safe_control_update(self.video_status_overlay, "video_status_overlay.update")
+        self._safe_control_update(self.video_panel, "video_panel.update")
+
+    def _toggle_video_diagnostics(self, e=None):
+        self.video_diag_text.visible = not self.video_diag_text.visible
+        self.btn_video_diag.content = "Ocultar diagnóstico" if self.video_diag_text.visible else "Diagnóstico"
+        self._refresh_video_status(force=True)
 
     #async def _update_video_display_loop(self):
     #    while not self.closing:
@@ -1376,6 +1564,7 @@ class SafeFlightApp:
                     rx_times = tuple(_g_video_frame_times) 
 
                 now = time.monotonic()
+                self._refresh_video_status()
 
                 if frame is not None:
                     last_frame_time = now
@@ -1399,28 +1588,21 @@ class SafeFlightApp:
                         if self.drone_manager.link and self.drone_manager.link.vehicle:
                             vehicle = self.drone_manager.link.vehicle
 
-                            # HOME VR
-                            home_data = self.get_home_pixel_position(
-                                vehicle,
-                                self.drone_manager.home_location,
-                                target_w,
-                                target_h,
+                            # AR: HOME (pinhole projection, models/ArProjection.py)
+                            ar_pose = self._ar_pose(vehicle) if self.vr_enabled else None
+                            ar_att = self._ar_attitude(vehicle) if self.vr_enabled else None
+                            if self.vr_enabled:
+                                self._draw_ar_banner(frame, ar_pose is not None, ar_att)
+                            home = self.drone_manager.home_location
+                            # Relative frame: HOME is altitude 0 (same reference as the vehicle and waypoints).
+                            home_data = (
+                                arp.project(*ar_pose, home.lat, home.lon, 0.0, target_w, target_h,
+                                            self.ar_camera, ar_att)
+                                if ar_pose and home else None
                             )
-
-                            if home_data and self.vr_enabled:
-                                x, y, pitch_deg = home_data
-                                dist = self.get_distance_metres(
-                                    vehicle.location.global_relative_frame,
-                                    self.drone_manager.home_location,
-                                )
-
-                                y = max(10, min(target_h - 10, y))
-                                base_scale = 700
-                                calculated_radius = base_scale / max(1, dist)
-                                radius_x = int(max(15, min(200, calculated_radius)))
-                                squash_factor = abs(math.sin(math.radians(pitch_deg)))
-                                radius_y = int(radius_x * squash_factor)
-                                radius_y = max(3, radius_y)
+                            if home_data:
+                                x, y = home_data.x, home_data.y
+                                radius_x, radius_y = arp.marker_radii(home_data, 700, 15, 200, 3)
 
                                 cv2.ellipse(
                                     frame,
@@ -1457,7 +1639,7 @@ class SafeFlightApp:
                                 )
                                 cv2.putText(
                                     frame,
-                                    f"{int(dist)}m",
+                                    arp.distance_label(home_data),
                                     (x - 10, y + 30),
                                     cv2.FONT_HERSHEY_SIMPLEX,
                                     0.5,
@@ -1472,21 +1654,15 @@ class SafeFlightApp:
                                 and self.vr_enabled
                             ):
                                 for idx, wp in enumerate(self.current_trajectory.points, start=1):
-                                    pixdata = self.project_waypoint_to_pixel(
-                                        vehicle, wp, target_w, target_h
+                                    pixdata = (
+                                        arp.project(*ar_pose, wp.x, wp.y, wp.z, target_w, target_h,
+                                                    self.ar_camera, ar_att)
+                                        if ar_pose else None
                                     )
                                     if pixdata is None:
                                         continue
-
-                                    x, y, pitch_deg, dist = pixdata
-                                    y = max(10, min(target_h - 10, y))
-
-                                    base_scale = 900
-                                    calculated_radius = base_scale / max(1, dist)
-                                    radius_x = int(max(20, min(250, calculated_radius)))
-                                    squash_factor = abs(math.sin(math.radians(pitch_deg)))
-                                    radius_y = int(radius_x * squash_factor)
-                                    radius_y = max(5, radius_y)
+                                    x, y = pixdata.x, pixdata.y
+                                    radius_x, radius_y = arp.marker_radii(pixdata, 900, 20, 250, 5)
 
                                     cv2.ellipse(
                                         frame,
@@ -1545,7 +1721,7 @@ class SafeFlightApp:
                                     )
                                     cv2.putText(
                                         frame,
-                                        f"{dist:.0f}m",
+                                        arp.distance_label(pixdata),
                                         (x - 15, y + radius_y + 15),
                                         cv2.FONT_HERSHEY_SIMPLEX,
                                         0.5,
@@ -1556,29 +1732,6 @@ class SafeFlightApp:
                     except Exception as vr_err:
                         print(f"Error overlay VR: {vr_err}")
 
-                    # FPS de recepción y antigüedad del fotograma decodificado.
-                    if frame_received_at is not None:
-                        current_time = time.monotonic()
-                        recent_times = [
-                            t for t in rx_times
-                            if current_time - t <= 2.0
-                        ]
-
-                        rx_fps = 0.0
-                        if len(recent_times) >= 2:
-                            elapsed = recent_times[-1] - recent_times[0]
-                            if elapsed > 0:
-                                rx_fps = (len(recent_times) - 1) / elapsed
-
-                        frame_age_ms = max(
-                            0.0,
-                            (current_time - frame_received_at) * 1000.0,
-                        )
-                        self._update_video_status_overlay(
-                            live=True,
-                            rx_fps=rx_fps,
-                            frame_age_ms=frame_age_ms,
-                        )
 
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(rgb)
@@ -1603,7 +1756,6 @@ class SafeFlightApp:
                     #    break
                     #await asyncio.sleep(0.066)
                 else:
-                    self._update_video_status_overlay(live=False)
                     target_w, target_h = self.video_display_size
                     black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
 
@@ -1660,11 +1812,12 @@ class SafeFlightApp:
                 vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
                 if vehicle:
                     v_mode = vehicle.mode.name
-                    is_active = vehicle.armed or v_mode in ["GUIDED", "TAKEOFF"]
+                    is_active = bool(vehicle.armed)
 
+                    self._refresh_control_ui(vehicle)
                     if not is_active:
-                        if self.btn_takeoff.disabled:
-                            self.btn_takeoff.disabled = False
+                        if self._ui_flying:
+                            self._set_flying(False)
                             self.speed_slider.disabled = False
                             self.alt_slider.disabled = False
                             self.alt_mode_radio.disabled = False
@@ -1676,10 +1829,10 @@ class SafeFlightApp:
                             self.controlmode_radio.disabled = False
                             self.btn_takeoff.text = "TAKEOFF"
                             self.btn_takeoff.bgcolor = "#3b8ed0"
-                            self.btn_land.disabled = True
                             self.btn_land.text = "LAND"
                     else:
-                        if self.btn_land.disabled and v_mode != "LAND":
+                        if not self._ui_flying and v_mode != "LAND":
+                            self._set_flying(True)
                             self.btn_takeoff.disabled = True
                             self.speed_slider.disabled = True
                             self.alt_slider.disabled = True
@@ -1695,10 +1848,29 @@ class SafeFlightApp:
                             self.traj_switch.disabled = True
                             self.btn_takeoff.text = "FLYING"
                             self.btn_takeoff.bgcolor = "gray"
-                            self.btn_land.disabled = False
                             self.btn_land.text = "LAND"
 
+                    self._update_link_status(vehicle)
                     status_text = f"MODE: {vehicle.mode.name}\nARMED: {vehicle.armed}"
+                    # Battery, GPS and identity for the pre-flight checks ("—" = unknown).
+                    try:
+                        batt = vehicle.battery
+                        volt = f"{batt.voltage:.2f} V" if batt and batt.voltage is not None else "—"
+                        level = f"{batt.level} %" if batt and batt.level is not None and batt.level >= 0 else "—"
+                    except Exception:
+                        volt, level = "—", "—"
+                    try:
+                        gps = vehicle.gps_0
+                        fix = gps.fix_type if gps and gps.fix_type is not None else "—"
+                        sats = gps.satellites_visible if gps and gps.satellites_visible is not None else "—"
+                    except Exception:
+                        fix, sats = "—", "—"
+                    ident = self.drone_manager.identity
+                    sysid = ident[0] if ident else "—"
+                    hb = vehicle.last_heartbeat
+                    hb_text = f"{hb:.1f} s" if hb is not None else "—"
+                    status_text += (f"\nBAT: {volt} · {level}\nGPS fix: {fix} · sats: {sats}"
+                                    f"\nSYSID: {sysid} · HB: {hb_text}")
                     self.lbl_status.value = status_text
                     self.lbl_status.color = "#2ecc71" if vehicle.armed else "#e74c3c"
 
@@ -1707,24 +1879,16 @@ class SafeFlightApp:
                     heading = vehicle.heading or 0
                     #print("DRONE POS:", lat, lon)
                     if lat is not None and lon is not None:
-                        self.last_known_lat = lat
-                        self.last_known_lon = lon   
                         self._update_drone_on_map(lat, lon, heading)
-
-                        if self.map_follow_drone:
-
-                            # Primera posición GPS
-                            if not self.map_initialized:
-                                await self._initialize_map_at_drone(lat, lon)
-                                self.last_centered_pos = (lat, lon)
-                            else:
-                                c_lat, c_lon = self.last_centered_pos
-                                if abs(lat - c_lat) > 0.0006 or abs(lon - c_lon) > 0.0006:
-                                    try:
-                                        await self.map_widget.center_on(point = fmap.MapLatitudeLongitude(lat, lon), zoom = 19)
-                                        self.last_centered_pos = (lat, lon)
-                                    except Exception:
-                                        pass
+                    # The map only moves to a recent 3D fix of the vehicle.
+                    gps_fix = vehicle.gps_0.fix_type if vehicle.gps_0 else None
+                    first_fix = self.map_follower.last_position is None
+                    target = self.map_follower.update(
+                        vehicle_position(lat, lon, gps_fix, self.drone_manager.gps_position_age_s()))
+                    if target is not None and not await self._move_map_to(target):
+                        self.map_follower.centred_on = None  # retry on the next update
+                    if first_fix and self.map_follower.last_position is not None:
+                        self._update_map_source_text()
 
                     alt = max(0, vehicle.location.global_relative_frame.alt or 0)
                     self.altitude_history.append(alt)
@@ -2021,41 +2185,44 @@ class SafeFlightApp:
         self.btn_connect.disabled = True
         self._safe_page_update()
 
-        conn_str = "udpin:0.0.0.0:14560" #if os.getenv('ENV_MODE', 'dev') == 'dev' else "host.docker.internal:14560"
-        
+        # El endpoint MAVLink procede del perfil activo (editable sin recompilar).
+        profile = self.active_profile
+        conn_str = profile.mavlink_connection_string()
+        self.profile_dropdown.disabled = True
+        self._safe_page_update()
+
         self.connection_stop_event.clear()
         self.connection_thread = threading.Thread(
             target=self._connection_worker,
-            args=(conn_str,),
+            args=(conn_str, profile),
             name="connection-worker",
             daemon=False,
         )
         self.connection_thread.start()
 
-    def _connection_worker(self, conn_string):  
-        #os.environ["SIM_conn_str"] = "udpin:0.0.0.0:14560"  
-        #os.environ["REAL_conn_str"] = "host.docker.internal:14560"  
-        print(f"DEBUG ENV_MODE={os.getenv('ENV_MODE')}")
-        print(f"DEBUG SIM_conn_str={os.getenv('SIM_conn_str')}")
-        print(f"DEBUG REAL_conn_str={os.getenv('REAL_conn_str')}")
-        print(f"DEBUG conn_str efectivo={conn_string}")
+    def _connection_worker(self, conn_string, profile: ConnectionProfile):
+        print(
+            f"[PROFILES] Conectando con perfil '{profile.name}' ({profile.kind}): "
+            f"{conn_string}"
+        )
 
         try:
             if self.closing or self.connection_stop_event.is_set():
                 return
-            env_mode = os.getenv('ENV_MODE', 'dev').lower()
-            mode = "REAL" if env_mode == 'prod' else "SIM"
-            print(f"DEBUG: Modo {env_mode}, usando {mode}: {conn_string}")
-            
-            if self.closing or self.connection_stop_event.is_set():
-                return
-            
+
             if self.drone_manager.link and self.drone_manager.link.is_connected and self.drone_manager.health.is_alive:
                 print("DEBUG: La conexión global ya está establecida.")
                 self._safe_run_task(self._apply_connection_success)
                 return
 
-            if self.drone_manager.setup_drone(mode=mode):
+            connected = self.drone_manager.setup_drone(
+                connection_string=conn_string,
+                baud_rate=profile.mavlink.baud_rate,
+                heartbeat_timeout=profile.timeouts.heartbeat_timeout_s,
+                connect_timeout=profile.timeouts.connect_timeout_s,
+            )
+            if connected:
+                self.connected_profile_id = profile.id
                 self._safe_run_task(self._apply_connection_success)
             else:
                 self._safe_run_task(
@@ -2080,7 +2247,7 @@ class SafeFlightApp:
     async def _apply_connection_success(self):
         self.btn_connect.text = "ONLINE"
         self.btn_connect.bgcolor = "#3498db"
-        self.btn_takeoff.disabled = False
+        self.btn_takeoff.disabled = True  # locked until an operator session is authorised
         self.speed_slider.disabled = False
         self.alt_slider.disabled = False
         self.alt_mode_radio.disabled = False
@@ -2100,11 +2267,8 @@ class SafeFlightApp:
 
     
     def _takeoff_action(self, e=None):
-        if (
-            self.selected_control_mode == DroneManager.CONTROL_TRAJECTORY
-            and (not self.current_trajectory or not self.current_trajectory.points)
-        ):
-            self._show_message("No hay trayectoria cargada para volar en modo trajectory.", error=True)
+        if self.drone_manager.guard.state != cg.AUTHORIZED:
+            self._show_message("TAKEOFF bloqueado: autoriza primero una sesión de control.", error=True)
             return
         if self.takeoff_thread and self.takeoff_thread.is_alive():
             return
@@ -2146,7 +2310,14 @@ class SafeFlightApp:
                 async def apply_result():
                     if self.takeoff_stop_event.is_set() or self.closing:
                         return
-                    if success:
+                    hover_only = (
+                        self.selected_control_mode == DroneManager.CONTROL_TRAJECTORY
+                        and (not self.current_trajectory or not self.current_trajectory.points)
+                    )
+                    if success and hover_only:
+                        self._show_message("Despegue completado: estacionario en GUIDED (sin trayectoria).")
+                        self.btn_takeoff.text = "FLYING"
+                    elif success:
                         try:
                             task = self.drone_manager.start_selected_controller(self.current_trajectory)
                             if task == False:
@@ -2156,7 +2327,6 @@ class SafeFlightApp:
                                 )
                         except Exception as ex:
                             self._show_message(f"Error iniciando control: {ex}", error=True)
-                        self.btn_land.disabled = False
                         self.btn_land.text = "LAND"
                         self.btn_takeoff.text = "FLYING"
                     else:
@@ -2173,7 +2343,7 @@ class SafeFlightApp:
                         self.btn_takeoff.text = "TAKEOFF"
                         self.btn_takeoff.bgcolor = "#3b8ed0"
                         self._show_message(
-                            "El dron no pudo despegar. Revisa GPS y modo GUIDED.",
+                            f"Despegue detenido: {self.drone_manager.last_error or 'sin confirmación'}",
                             error=True,
                         )
                     self._safe_page_update()
@@ -2194,15 +2364,149 @@ class SafeFlightApp:
             return
         if self.takeoff_stop_event:
             self.takeoff_stop_event.set()
-        if self.drone_manager.link and self.drone_manager.link.vehicle:
-            self.btn_land.disabled = True
-            self.btn_land.text = "LANDING..."
+        self._clear_keyboard_state()
+        self._run_flight_command("LAND", self.drone_manager.land)
+
+    def _rtl_action(self, e=None):
+        if self.closing:
+            return
+        if self.takeoff_stop_event:
+            self.takeoff_stop_event.set()
+        self._clear_keyboard_state()
+        self._run_flight_command("RTL", self.drone_manager.return_to_launch)
+
+    def _run_flight_command(self, label, action):
+        """Runs a blocking manager command off the UI thread and reports the result."""
+        def worker():
+            ok = action()
+            if ok:
+                msg = f"{label} confirmado por el autopiloto."
+            else:
+                msg = f"{label} no ejecutado: {self.drone_manager.last_error}"
+            self._safe_run_task(self._async_message, msg, not ok)
+
+        threading.Thread(target=worker, name=f"cmd-{label.lower()}", daemon=True).start()
+
+    async def _async_message(self, message, error=False):
+        self._show_message(message, error=error)
+
+    # ========================================================
+    # CONTROL SESSION (CommandGuard)
+    # ========================================================
+    def _set_flying(self, flying):
+        self._ui_flying = bool(flying)
+        self.btn_takeoff.content = "FLYING" if flying else "TAKEOFF"
+
+    def _refresh_control_ui(self, vehicle=None):
+        guard = self.drone_manager.guard
+        authorized = guard.state == cg.AUTHORIZED
+        emergency = guard.state in (cg.AUTHORIZED, cg.SUSPENDED)
+        self.control_status_text.value = guard.status_text()
+        self.control_status_text.color = {cg.AUTHORIZED: "#fb7185", cg.SUSPENDED: "#e67e22"}.get(
+            guard.state, "#f0b429")
+        connected = bool(self.drone_manager.link and self.drone_manager.link.is_connected)
+        self.btn_authorize.disabled = not connected or authorized
+        self.btn_revoke.disabled = guard.state == cg.MONITOR
+        flying = self._ui_flying
+        busy = bool(self.takeoff_thread and self.takeoff_thread.is_alive())
+        self.btn_takeoff.disabled = not authorized or flying or busy
+        self.btn_land.disabled = not emergency
+        self.btn_rtl.disabled = not emergency
+        self.radio_keyboard.disabled = not authorized
+        if not authorized and self.controlmode_radio.value == DroneManager.CONTROL_KEYBOARD:
+            self.controlmode_radio.value = DroneManager.CONTROL_TRAJECTORY
+            self.drone_manager.select_control_mode(DroneManager.CONTROL_TRAJECTORY)
+            self.selected_control_mode = DroneManager.CONTROL_TRAJECTORY
+
+    def _build_authorize_dialog(self):
+        self.auth_identity_text = ft.Text("", color="white", size=13, selectable=True)
+        self.auth_checks = [
+            ft.Checkbox(label=text, value=False) for text in (
+                "Piloto con mando RC presente y control manual verificado",
+                "Zona despejada; hélices, estructura y batería inspeccionadas",
+                "Comprobaciones pre-arm del autopiloto sin errores",
+                "Failsafes del autopiloto configurados (RC, batería, GCS)",
+                "Autorizo esta sesión de pruebas (caduca a los 20 min)",
+            )
+        ]
+        self.auth_sysid_field = ft.TextField(label="Escribe el SYSID del vehículo", width=260,
+                                             dense=True, bgcolor="#1b1b1b", color="white")
+        self.auth_error_text = ft.Text("", color="#fb7185", size=12)
+        self.auth_dialog = ft.Container(
+            visible=False,
+            expand=True,
+            bgcolor="#000000b0",
+            alignment=ft.Alignment(0, 0),
+            content=ft.Container(
+                width=620,
+                padding=20,
+                border_radius=12,
+                bgcolor="#202020",
+                border=ft.Border.all(1, "#fb7185"),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    scroll=ft.ScrollMode.AUTO,
+                    controls=[
+                        ft.Text("Autorizar sesión de control", size=20, weight=ft.FontWeight.BOLD, color="white"),
+                        ft.Text("Permite enviar comandos de vuelo (ARM, TAKEOFF, LAND, RTL, movimiento) a este "
+                                "vehículo. Las comprobaciones del autopiloto no se omiten.",
+                                color="#aaaaaa", size=12),
+                        self.auth_identity_text,
+                        *self.auth_checks,
+                        self.auth_sysid_field,
+                        self.auth_error_text,
+                        ft.Row(alignment=ft.MainAxisAlignment.END, controls=[
+                            ft.TextButton("Cancelar", on_click=self._close_authorize_dialog),
+                            ft.Button("Autorizar", bgcolor="#c0392b", color="white",
+                                      on_click=self._confirm_authorize),
+                        ]),
+                    ],
+                ),
+            ),
+        )
+        return self.auth_dialog
+
+    def _open_authorize_dialog(self, e=None):
+        snap = self.drone_manager.snapshot()
+        vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
+        version = str(getattr(vehicle, "version", "")) if vehicle else ""
+        age = f"{snap.heartbeat_age_s:.1f} s" if snap.heartbeat_age_s is not None else "—"
+        self.auth_identity_text.value = (
+            f"Vehículo: SYSID {snap.system_id} · COMPID {snap.component_id} · "
+            f"tipo MAV {snap.vehicle_type} · {version}\n"
+            f"Modo {snap.mode} · {'ARMADO' if snap.armed else 'desarmado'} · GPS fix {snap.gps_fix} "
+            f"({snap.satellites} sats) · último heartbeat {age}"
+        )
+        for box in self.auth_checks:
+            box.value = False
+        self.auth_sysid_field.value = ""
+        self.auth_error_text.value = ""
+        self._clear_keyboard_state()
+        self.auth_dialog.visible = True
+        self._safe_page_update()
+
+    def _close_authorize_dialog(self, e=None):
+        self.auth_dialog.visible = False
+        self._safe_page_update()
+
+    def _confirm_authorize(self, e=None):
+        decision = self.drone_manager.guard.authorize(
+            [bool(box.value) for box in self.auth_checks], str(self.auth_sysid_field.value or ""))
+        if not decision:
+            self.auth_error_text.value = decision.reason
             self._safe_page_update()
-            self.drone_manager.link.vehicle.mode = VehicleMode("LAND")
-            self.drone_manager.current_mode = "IDLE"
-            self._clear_keyboard_state()
-        if self.takeoff_thread and self.takeoff_thread.is_alive():
-            self.takeoff_thread.join(timeout=2.0)
+            return
+        self.auth_dialog.visible = False
+        self._refresh_control_ui()
+        self._show_message("Sesión de control autorizada. Los comandos se registran en el log.")
+        self._safe_page_update()
+
+    def _revoke_session(self, e=None):
+        self.drone_manager.guard.revoke("Revocada por el operador")
+        self._refresh_control_ui()
+        self._show_message("Sesión de control revocada: solo monitorización.")
+        self._safe_page_update()
            
 
     # ========================================================
@@ -2338,6 +2642,9 @@ class SafeFlightApp:
         self.btn_connect.text = "CONNECTAR"
         self.btn_connect.disabled = False
         self.btn_connect.bgcolor = "#28a745"
+        self.profile_dropdown.disabled = False
+        self.link_status_text.value = "MAVLink: error de conexión"
+        self.link_status_text.color = "#fb7185"
         self._safe_page_update()
         self._show_message(message, error=True)
         print(f"DEBUG: {message}")
@@ -2385,7 +2692,9 @@ class SafeFlightApp:
         # 2) detener componentes del drone manager
         try:
             if getattr(self.drone_manager, "health", None):
-                self.drone_manager.health._stop_event().set()
+                # Detiene el monitor para que el cierre de la interfaz no
+                # dispare el callback de pérdida de enlace (sin comandos).
+                self.drone_manager.health.stop()
         except Exception as e:
             print(f"Error health.stop(): {e}")
 
@@ -2453,11 +2762,9 @@ class SafeFlightApp:
                     print ("Error cerrando vehicle:", sys.exc_info())
                     pass
 
-                try:
-                    dm.link.close()
-                except Exception:
-                    print ("Error cerrando link:", sys.exc_info())
-                    pass
+                # DroneConnection has no close(); the vehicle was closed above.
+                dm.link.vehicle = None
+                dm.link.is_connected = False
         except Exception:
             print ("Error limpiando link:", sys.exc_info())
             pass
@@ -2483,12 +2790,8 @@ class SafeFlightApp:
         self.last_heading = -1
         self.altitude_history: List[float] = []
         self.is_video_main = False
-        self.map_follow_drone = True
-        self.map_initialized = False
-        self.last_centered_pos = None
+        self.map_follower.reset()
         self.drone_icon_container = None
-        self.last_known_lat = 41.3874
-        self.last_known_lon = 2.1686
         print("✓ DroneManager global destruido")
     # UTILIDADES UI
     # ========================================================
@@ -2548,91 +2851,6 @@ class SafeFlightApp:
         dlong = loc2.lon - loc1.lon
         return math.sqrt((dlat * 111319.5) ** 2 + (dlong * 111319.5) ** 2)
 
-    def get_home_pixel_position(self, vehicle, home_loc, screen_width, screen_height):
-        if not home_loc or not vehicle.location.global_relative_frame:
-            return None
-
-        current_loc = vehicle.location.global_relative_frame
-        dist = self.get_distance_metres(current_loc, home_loc)
-        if dist < 5.0:
-            return None
-
-        dlat = home_loc.lat - current_loc.lat
-        dlon = home_loc.lon - current_loc.lon
-
-        angle_to_home = math.atan2(dlon, dlat)
-        angle_to_home_deg = math.degrees(angle_to_home) % 360
-        diff_angle = (angle_to_home_deg - vehicle.heading + 180) % 360 - 180
-
-        fov_x = 80
-
-        if abs(diff_angle) < fov_x / 2:
-            x_pos = (diff_angle / (fov_x / 2)) * (screen_width / 2) + (screen_width / 2)
-
-            fov_y = 60
-            rel_alt = current_loc.alt - home_loc.alt
-
-            if dist > 0:
-                pitch_angle = math.degrees(math.atan2(rel_alt, dist))
-            else:
-                pitch_angle = 90
-
-            y_pos = (pitch_angle / (fov_y / 2)) * (screen_height / 2) + (screen_height / 2)
-
-            return int(x_pos), int(y_pos), pitch_angle
-
-        return None
-
-    def project_waypoint_to_pixel(
-        self,
-        vehicle,
-        waypoint,
-        screen_w,
-        screen_h,
-        fovx_deg=80,
-        fovy_deg=60,
-    ):
-        """
-        Proyecta un waypoint 3D a coordenadas píxel.
-        Retorna (x, y, pitch_deg, dist) o None si está fuera FOV.
-        """
-        drone_loc = vehicle.location.global_relative_frame
-        if not drone_loc:
-            return None
-
-        dlat = waypoint.x - drone_loc.lat
-        dlon = waypoint.y - drone_loc.lon
-        dx = dlat * 111319.5
-        dy = dlon * 111319.5 * math.cos(math.radians(drone_loc.lat))
-        dz = waypoint.z - drone_loc.alt
-
-        dist_xy = math.sqrt(dx**2 + dy**2)
-        if dist_xy < 0.5:
-            return None
-
-        dist_3d = math.sqrt(dist_xy**2 + dz**2)
-
-        angle_to_wp_rad = math.atan2(dy, dx)
-        angle_to_wp_deg = math.degrees(angle_to_wp_rad)
-
-        drone_heading_deg = vehicle.heading
-        rel_angle_deg = angle_to_wp_deg - drone_heading_deg
-        rel_angle_deg = (rel_angle_deg + 180) % 360 - 180
-
-        if abs(rel_angle_deg) > fovx_deg / 2:
-            return None
-
-        x = int((rel_angle_deg / (fovx_deg / 2)) * (screen_w / 2) + screen_w / 2)
-
-        pitch_angle_deg = math.degrees(math.atan2(dz, dist_xy))
-
-        if abs(pitch_angle_deg) > fovy_deg / 2:
-            return None
-
-        y = int((pitch_angle_deg / (fovy_deg / 2)) * (screen_h / 2) + screen_h / 2)
-
-        return (x, y, pitch_angle_deg, dist_3d)
-
     def _ui_gone(self, origin: str, exc: Exception | None = None):
         if self.closing:
             return False
@@ -2669,10 +2887,86 @@ class SafeFlightApp:
 
 
 def main(page: ft.Page):
-    
+
     SafeFlightApp(page)
 
 
+def run_self_check() -> int:
+    """Non-interactive check used by build.py and CI on packaged builds.
+
+    Verifies that the bundled resources, the native video stack and the
+    profile store work on this platform without opening the GUI and
+    without opening any network connection.
+    """
+    import platform
+    import tempfile
+
+    report = {
+        "app": "SafeFlight Desktop",
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "checks": {},
+    }
+    ok = True
+
+    def check(name, func):
+        nonlocal ok
+        try:
+            report["checks"][name] = {"ok": True, "detail": func()}
+        except Exception as exc:  # report every failure, do not stop early
+            ok = False
+            report["checks"][name] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
+    res = resource_dir()
+
+    def require_file(path):
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        return str(path)
+
+    def pyav_h264():
+        if "h264" not in av.codecs_available:
+            raise RuntimeError("H.264 decoder not available in PyAV build")
+        return f"av {av.__version__}, h264 decoder available"
+
+    check("assets", lambda: require_file(res / "assets" / "drone_icon.png"))
+    check("stream_sdp_template", lambda: require_file(res / "stream.sdp"))
+    check("pyav", pyav_h264)
+    def mavlink_dialects():
+        import importlib
+        for name in ("pymavlink.dialects.v10.ardupilotmega", "pymavlink.dialects.v20.ardupilotmega"):
+            importlib.import_module(name)
+        return "MAVLink 1 and MAVLink 2 ardupilotmega dialects available"
+
+    check("opencv", lambda: cv2.__version__)
+    check("mavlink_dialects", mavlink_dialects)
+    check("flet", lambda: ft.__version__ if hasattr(ft, "__version__") else "imported")
+
+    def profiles_roundtrip():
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProfileStore(config_dir=tmp, environ={}).load()
+            store.save()
+            again = ProfileStore(config_dir=tmp, environ={}).load()
+            return [p.id for p in again.profiles]
+    check("profile_store", profiles_roundtrip)
+    check("user_config_dir", lambda: str(user_config_dir()))
+
+    report["ok"] = ok
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    if "--self-check-output" in sys.argv:
+        index = sys.argv.index("--self-check-output") + 1
+        if index < len(sys.argv):
+            with open(sys.argv[index], "w", encoding="utf-8") as handle:
+                handle.write(text + "\n")
+    print(text)
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        sys.exit(run_self_check())
+    start_session_log()
     ft.context.disable_auto_update()
     ft.run(main)

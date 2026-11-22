@@ -1,0 +1,274 @@
+{
+  "description": "MAVLink frames encoded with pymavlink and the values SafeFlight clients must derive",
+  "generator": "scripts/generate_mavlink_vectors.py",
+  "pymavlink_dialect": "ardupilotmega (MAVLink 2)",
+  "contract": "shared/protocols/mavlink-telemetry-contract.md",
+  "vectors": [
+    {
+      "name": "heartbeat_disarmed_stabilize",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd090000000101000000000000000203010303f447",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": false,
+        "custom_mode": 0,
+        "flight_mode": "STABILIZE",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 3,
+        "is_vehicle": true
+      },
+      "note": ""
+    },
+    {
+      "name": "heartbeat_armed_guided",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd09000001010100000004000000020381040313d8",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": true,
+        "custom_mode": 4,
+        "flight_mode": "GUIDED",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 4,
+        "is_vehicle": true
+      },
+      "note": ""
+    },
+    {
+      "name": "heartbeat_land_v1",
+      "mavlink_version": 1,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fe0902010100090000000203810403df9d",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": true,
+        "custom_mode": 9,
+        "flight_mode": "LAND",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 4,
+        "is_vehicle": true
+      },
+      "note": "MAVLink v1 framing (0xFE)"
+    },
+    {
+      "name": "heartbeat_unknown_mode",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd0900000301010000006300000002030103037254",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": false,
+        "custom_mode": 99,
+        "flight_mode": "UNKNOWN(99)",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 3,
+        "is_vehicle": true
+      },
+      "note": "Unknown custom modes must not be shown as a valid mode"
+    },
+    {
+      "name": "heartbeat_from_gcs_is_ignored",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd09000004ffbe0000000000000006080000033e03",
+      "expected": {
+        "system_id": 255,
+        "component_id": 190,
+        "armed": false,
+        "custom_mode": 0,
+        "flight_mode": null,
+        "vehicle_type": 6,
+        "autopilot": 8,
+        "system_status": 0,
+        "is_vehicle": false
+      },
+      "note": "A GCS heartbeat must not update vehicle state nor count as vehicle link"
+    },
+    {
+      "name": "sys_status_battery",
+      "mavlink_version": 2,
+      "msg_id": 1,
+      "msg_name": "SYS_STATUS",
+      "frame_hex": "fd1f0000050101010000000000000000000000000000f401b83dce040000000000000000000000004ccaf7",
+      "expected": {
+        "battery_voltage_v": 15.8,
+        "battery_current_a": 12.3,
+        "battery_remaining_pct": 76
+      },
+      "note": ""
+    },
+    {
+      "name": "sys_status_battery_unknown",
+      "mavlink_version": 2,
+      "msg_id": 1,
+      "msg_name": "SYS_STATUS",
+      "frame_hex": "fd1f0000060101010000000000000000000000000000f401ffffffff000000000000000000000000ffe0ca",
+      "expected": {
+        "battery_voltage_v": null,
+        "battery_current_a": null,
+        "battery_remaining_pct": null
+      },
+      "note": "UINT16_MAX voltage and -1 current/remaining mean 'unknown'"
+    },
+    {
+      "name": "global_position_int",
+      "mavlink_version": 2,
+      "msg_id": 33,
+      "msg_name": "GLOBAL_POSITION_INT",
+      "frame_hex": "fd1c000007010121000040e201005037ab18f0e64a0114530200d4300000960006ff1e00aa69cace",
+      "expected": {
+        "lat_deg": 41.3874,
+        "lon_deg": 2.1686,
+        "alt_msl_m": 152.34,
+        "relative_alt_m": 12.5,
+        "heading_deg": 270.5
+      },
+      "note": ""
+    },
+    {
+      "name": "global_position_int_no_heading",
+      "mavlink_version": 2,
+      "msg_id": 33,
+      "msg_name": "GLOBAL_POSITION_INT",
+      "frame_hex": "fd1c000008010121000041e2010000000000000000000000000000000000000000000000ffffac39",
+      "expected": {
+        "lat_deg": null,
+        "lon_deg": null,
+        "alt_msl_m": 0.0,
+        "relative_alt_m": 0.0,
+        "heading_deg": null
+      },
+      "note": "lat=lon=0 is treated as 'no position'; hdg UINT16_MAX means unknown"
+    },
+    {
+      "name": "vfr_hud",
+      "mavlink_version": 2,
+      "msg_id": 74,
+      "msg_name": "VFR_HUD",
+      "frame_hex": "fd1300000901014a000066668640000070409a994941cdccccbe0f01305cb3",
+      "expected": {
+        "airspeed_mps": 4.2,
+        "groundspeed_mps": 3.75,
+        "heading_deg": 271,
+        "throttle_pct": 48,
+        "alt_m": 12.6,
+        "climb_mps": -0.4
+      },
+      "note": ""
+    },
+    {
+      "name": "gps_raw_int_3d_fix",
+      "mavlink_version": 2,
+      "msg_id": 24,
+      "msg_name": "GPS_RAW_INT",
+      "frame_hex": "fd1e00000a0101180000e8030000000000005037ab18f0e64a01145302005a00780032000000030eb2db",
+      "expected": {
+        "fix_type": 3,
+        "satellites_visible": 14,
+        "hdop": 0.9
+      },
+      "note": ""
+    },
+    {
+      "name": "gps_raw_int_no_fix",
+      "mavlink_version": 2,
+      "msg_id": 24,
+      "msg_name": "GPS_RAW_INT",
+      "frame_hex": "fd1e00000b0101180000e803000000000000000000000000000000000000ffffffff0000000001ff45d9",
+      "expected": {
+        "fix_type": 1,
+        "satellites_visible": null,
+        "hdop": null
+      },
+      "note": "satellites 255 and eph UINT16_MAX mean unknown"
+    },
+    {
+      "name": "statustext_prearm",
+      "mavlink_version": 2,
+      "msg_id": 253,
+      "msg_name": "STATUSTEXT",
+      "frame_hex": "fd1400000c0101fd00000250726541726d3a204e656564203344204669780f56",
+      "expected": {
+        "severity": 2,
+        "text": "PreArm: Need 3D Fix"
+      },
+      "note": ""
+    },
+    {
+      "name": "command_ack_denied",
+      "mavlink_version": 2,
+      "msg_id": 77,
+      "msg_name": "COMMAND_ACK",
+      "frame_hex": "fd0300000d01014d00009001022615",
+      "expected": {
+        "command": 400,
+        "result": 2
+      },
+      "note": "Accepted/denied ACK is not completion of the manoeuvre"
+    },
+    {
+      "name": "heartbeat_bad_crc_rejected",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd0900000001010000000000ff000203010303f447",
+      "expected": null,
+      "note": "Corrupted payload: the parser must reject the frame"
+    },
+    {
+      "name": "garbage_then_valid_heartbeat",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "0011223344fd09000001010100000004000000020381040313d8",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": true,
+        "custom_mode": 4,
+        "flight_mode": "GUIDED",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 4,
+        "is_vehicle": true
+      },
+      "expect": "single",
+      "note": "Leading noise must be skipped"
+    },
+    {
+      "name": "false_start_then_recovery",
+      "mavlink_version": 2,
+      "msg_id": 0,
+      "msg_name": "HEARTBEAT",
+      "frame_hex": "fd01fd09000001010100000004000000020381040313d8fd09000001010100000004000000020381040313d8fd09000001010100000004000000020381040313d8",
+      "expected": {
+        "system_id": 1,
+        "component_id": 1,
+        "armed": true,
+        "custom_mode": 4,
+        "flight_mode": "GUIDED",
+        "vehicle_type": 2,
+        "autopilot": 3,
+        "system_status": 4,
+        "is_vehicle": true
+      },
+      "expect": "last",
+      "note": "Parser must resynchronise within the following frames and decode at least the last one"
+    }
+  ]
+}

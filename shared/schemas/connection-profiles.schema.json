@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Joowww/SafeFlightDesktop/shared/schemas/connection-profiles.schema.json",
+  "title": "SafeFlight connection profiles",
+  "description": "Persistent connection profiles shared by SafeFlight Desktop (models/ConnectionProfiles.py) and SafeFlight Android (config/ConnectionProfile.kt). Unknown properties are ignored by both readers to allow forward-compatible additions.",
+  "type": "object",
+  "required": ["schema_version", "profiles"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "active_profile_id": { "type": "string" },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "$defs": {
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "profile": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,47}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "kind": { "enum": ["siyi_local", "cellular_vpn", "sitl", "custom"] },
+        "builtin": { "type": "boolean", "description": "Factory profile: can be restored, cannot be deleted." },
+        "notes": { "type": "string" },
+        "mavlink": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "enum": ["udp_listen", "udp_connect", "tcp_client", "serial", "custom"],
+              "description": "Android supports udp_listen and udp_connect only."
+            },
+            "local_host": { "type": "string", "description": "Bind address for udp_listen (0.0.0.0 = all interfaces)." },
+            "local_port": { "$ref": "#/$defs/port" },
+            "remote_host": { "type": "string" },
+            "remote_port": { "$ref": "#/$defs/port" },
+            "serial_device": { "type": "string", "description": "Desktop only, e.g. COM5 or /dev/ttyACM0." },
+            "baud_rate": { "type": "integer" },
+            "connection_string": { "type": "string", "description": "Raw pymavlink string for transport=custom (Desktop only)." },
+            "send_gcs_heartbeat": {
+              "type": "boolean",
+              "default": false,
+              "description": "Android only. Sends a 1 Hz GCS HEARTBEAT; required for udp_connect. Stopping it may trigger ArduPilot's GCS failsafe if FS_GCS_ENABLE is active."
+            }
+          }
+        },
+        "video": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": ["rtp_udp", "rtsp", "none"],
+              "description": "rtp_udp (H.264 RTP described by a local SDP) is Desktop only; Android requires RTSP."
+            },
+            "rtp_udp_port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+            "rtsp_url": { "type": "string", "pattern": "^rtsps?://" },
+            "rtsp_transport": { "enum": ["tcp", "udp"] }
+          }
+        },
+        "timeouts": {
+          "type": "object",
+          "properties": {
+            "connect_timeout_s": { "type": "number", "minimum": 5, "maximum": 300 },
+            "heartbeat_timeout_s": { "type": "number", "minimum": 5, "maximum": 120, "description": "Desktop: wait for the first heartbeat when connecting." },
+            "telemetry_stale_s": { "type": "number", "minimum": 0.5, "maximum": 60 },
+            "video_stale_s": { "type": "number", "minimum": 0.5, "maximum": 60 },
+            "video_reconnect_interval_s": { "type": "number", "minimum": 0.2, "maximum": 30 }
+          }
+        },
+        "diagnostics": {
+          "type": "object",
+          "properties": { "verbose_logging": { "type": "boolean" } }
+        }
+      }
+    }
+  }
+}

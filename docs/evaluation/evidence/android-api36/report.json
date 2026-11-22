@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-19 19:43:23",
+  "device": "Android 16 (API 36)",
+  "apk": "%USERPROFILE%\\SafeFlightDesktop-GitHub\\dist\\artifacts\\SafeFlight-Android-0.3.0-debug.apk",
+  "steps": [
+    {
+      "id": "A-01",
+      "description": "Instalación limpia y arranque: valores desconocidos como '—'",
+      "result": "PASS",
+      "detail": "Android 16 (API 36); 8 valores '—'",
+      "evidence": [
+        "A-01-arranque.png"
+      ]
+    },
+    {
+      "id": "A-02",
+      "description": "Editar el perfil SITL desde la interfaz (UDP hacia remoto 10.0.2.2:14551) y guardar",
+      "result": "PASS",
+      "detail": "perfil guardado en SharedPreferences: udp_connect 10.0.2.2:14551 con heartbeat de GCS",
+      "evidence": []
+    },
+    {
+      "id": "A-03",
+      "description": "Conectar telemetría desde la pantalla de conexión",
+      "result": "PASS",
+      "detail": "estado CONECTADO",
+      "evidence": [
+        "A-03-conexion.png"
+      ]
+    },
+    {
+      "id": "A-04",
+      "description": "Pantalla de vuelo: telemetría y vídeo RTSP",
+      "result": "PASS",
+      "detail": "'MODO LOITER', 'VÍDEO EN DIRECTO'",
+      "evidence": [
+        "A-04-vuelo.png"
+      ]
+    },
+    {
+      "id": "A-05",
+      "description": "Pérdida de telemetría (STALE → LOST) y recuperación",
+      "result": "PASS",
+      "detail": "log: obsoleta → pérdida → heartbeat recibido; pantalla: banner de pérdida → CONECTADO",
+      "evidence": [
+        "A-05-perdida.png"
+      ]
+    },
+    {
+      "id": "A-06",
+      "description": "Caída y vuelta del servidor RTSP: recuperación automática del vídeo",
+      "result": "PASS",
+      "detail": "'VÍDEO CONGELADO' → 'VÍDEO EN DIRECTO'",
+      "evidence": []
+    },
+    {
+      "id": "A-07",
+      "description": "Ciclo de vida: HOME libera el decodificador; al volver se reanuda",
+      "result": "PASS",
+      "detail": "decodificador liberado y reanudado; telemetría continua",
+      "evidence": []
+    },
+    {
+      "id": "A-08",
+      "description": "Persistencia: forzar cierre y reabrir conserva el perfil editado",
+      "result": "PASS",
+      "detail": "perfil SITL editado conservado tras force-stop",
+      "evidence": []
+    },
+    {
+      "id": "A-09",
+      "description": "Controles bloqueados: ARM se rechaza con motivo y no se envía comando",
+      "result": "PASS",
+      "detail": "ARM no disponible: Controles deshabilitados: pendientes de pruebas SITL, análisis de seguridad y autorización operativa",
+      "evidence": [
+        "A-09-arm-bloqueado.png"
+      ]
+    },
+    {
+      "id": "A-10",
+      "description": "Pantalla de misiones identifica los datos como demostración",
+      "result": "PASS",
+      "detail": "banner presente",
+      "evidence": [
+        "A-10-misiones.png"
+      ]
+    }
+  ]
+}

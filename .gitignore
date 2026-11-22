@@ -65,10 +65,16 @@ releases/
 *.pem
 *.key
 *.pfx
-.github/
 .vscode/
 *.bak
 *.backup
 *.backup.*
 *.before-*
 *.video-backup
+
+# --- Test and build outputs ---
+.pytest_cache/
+
+# Legacy local Docker Hub workflow: kept on disk, intentionally not versioned
+# (see docs/architecture/build-and-deployment.md, section "Workflow heredado").
+.github/workflows/main.yml

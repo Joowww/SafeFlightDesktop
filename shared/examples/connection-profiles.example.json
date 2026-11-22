@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "active_profile_id": "sitl",
+  "profiles": [
+    {
+      "id": "siyi-local",
+      "name": "SIYI LOCAL",
+      "kind": "siyi_local",
+      "builtin": true,
+      "notes": "Enlace local a través de SIYI (red 192.168.144.0/24). Valores PROVISIONALES: verificar la IP de la Raspberry y el reenvío MAVLink en la red SIYI antes de usar.",
+      "mavlink": {
+        "transport": "udp_listen",
+        "local_host": "0.0.0.0",
+        "local_port": 14560,
+        "remote_host": "",
+        "remote_port": 14550,
+        "serial_device": "",
+        "baud_rate": 57600,
+        "connection_string": ""
+      },
+      "video": {
+        "mode": "rtsp",
+        "rtp_udp_port": 5004,
+        "rtsp_url": "rtsp://192.168.144.30:8554/raspicam",
+        "rtsp_transport": "tcp"
+      },
+      "timeouts": {
+        "connect_timeout_s": 90.0,
+        "heartbeat_timeout_s": 30.0,
+        "telemetry_stale_s": 3.0,
+        "video_stale_s": 2.0,
+        "video_reconnect_interval_s": 1.0
+      },
+      "diagnostics": {
+        "verbose_logging": false
+      }
+    },
+    {
+      "id": "cellular-vpn",
+      "name": "5G / VPN",
+      "kind": "cellular_vpn",
+      "builtin": true,
+      "notes": "Configuración vigente hasta v0.2: MAVProxy en la Raspberry reenvía MAVLink a este equipo (UDP 14560) y el vídeo H.264 llega por RTP/UDP 5004.",
+      "mavlink": {
+        "transport": "udp_listen",
+        "local_host": "0.0.0.0",
+        "local_port": 14560,
+        "remote_host": "",
+        "remote_port": 14550,
+        "serial_device": "",
+        "baud_rate": 57600,
+        "connection_string": ""
+      },
+      "video": {
+        "mode": "rtp_udp",
+        "rtp_udp_port": 5004,
+        "rtsp_url": "rtsp://192.168.144.30:8554/raspicam",
+        "rtsp_transport": "tcp"
+      },
+      "timeouts": {
+        "connect_timeout_s": 90.0,
+        "heartbeat_timeout_s": 30.0,
+        "telemetry_stale_s": 3.0,
+        "video_stale_s": 2.0,
+        "video_reconnect_interval_s": 1.0
+      },
+      "diagnostics": {
+        "verbose_logging": false
+      }
+    },
+    {
+      "id": "raspberry-lab",
+      "name": "RASPBERRY / CUBE (LAB)",
+      "kind": "custom",
+      "builtin": true,
+      "notes": "Raspberry Pi del laboratorio (172.16.15.85) con Cube Orange en /dev/ttyACM0 a 57600. MAVProxy reenvía MAVLink a este equipo. Verificar la IP del equipo antes de conectar; primera conexión siempre en SOLO MONITORIZACIÓN. Vídeo: RTP/UDP 5004 desde rpicam-vid; alternativa RTSP (MediaMTX en la Raspberry) en rtsp://172.16.15.85:8554/cam.",
+      "mavlink": {
+        "transport": "udp_listen",
+        "local_host": "0.0.0.0",
+        "local_port": 14560,
+        "remote_host": "",
+        "remote_port": 14550,
+        "serial_device": "",
+        "baud_rate": 57600,
+        "connection_string": ""
+      },
+      "video": {
+        "mode": "rtp_udp",
+        "rtp_udp_port": 5004,
+        "rtsp_url": "rtsp://172.16.15.85:8554/cam",
+        "rtsp_transport": "tcp"
+      },
+      "timeouts": {
+        "connect_timeout_s": 90.0,
+        "heartbeat_timeout_s": 30.0,
+        "telemetry_stale_s": 3.0,
+        "video_stale_s": 2.0,
+        "video_reconnect_interval_s": 1.0
+      },
+      "diagnostics": {
+        "verbose_logging": false
+      }
+    },
+    {
+      "id": "sitl",
+      "name": "SITL / SIMULACIÓN",
+      "kind": "sitl",
+      "builtin": true,
+      "notes": "ArduPilot SITL o el generador de pruebas scripts/mavlink_test_sender.py enviando a UDP 14560.",
+      "mavlink": {
+        "transport": "udp_listen",
+        "local_host": "0.0.0.0",
+        "local_port": 14560,
+        "remote_host": "",
+        "remote_port": 14550,
+        "serial_device": "",
+        "baud_rate": 57600,
+        "connection_string": ""
+      },
+      "video": {
+        "mode": "rtp_udp",
+        "rtp_udp_port": 5004,
+        "rtsp_url": "rtsp://192.168.144.30:8554/raspicam",
+        "rtsp_transport": "tcp"
+      },
+      "timeouts": {
+        "connect_timeout_s": 90.0,
+        "heartbeat_timeout_s": 30.0,
+        "telemetry_stale_s": 3.0,
+        "video_stale_s": 2.0,
+        "video_reconnect_interval_s": 1.0
+      },
+      "diagnostics": {
+        "verbose_logging": false
+      }
+    }
+  ]
+}

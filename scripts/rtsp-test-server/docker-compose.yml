@@ -1,0 +1,25 @@
+# Independent RTSP test source for SafeFlight Desktop and Android.
+#
+#   docker compose -f scripts/rtsp-test-server/docker-compose.yml up -d
+#
+# Publishes a synthetic 1280x720 H.264 test pattern (frame counter overlay),
+# identified in the stream metadata as "SafeFlight-test-pattern",
+# at rtsp://<host>:18554/test. Reachable from the Android emulator as
+# rtsp://10.0.2.2:18554/test and from Desktop as rtsp://127.0.0.1:18554/test.
+# It is a test fixture only; it does not touch the drone or the Raspberry Pi.
+services:
+  rtsp-test-server:
+    image: bluenviron/mediamtx:1.21.4-ffmpeg
+    container_name: safeflight-rtsp-test
+    ports:
+      # Host port 18554: the Android emulator already uses 127.0.0.1:8554 (gRPC).
+      - "18554:8554"
+    environment:
+      MTX_PROTOCOLS: tcp,udp
+      MTX_PATHS_TEST_RUNONINIT: >-
+        ffmpeg -hide_banner -loglevel warning -re
+        -f lavfi -i testsrc=size=1280x720:rate=30
+        -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline
+        -g 30 -pix_fmt yuv420p -metadata title=SafeFlight-test-pattern
+        -f rtsp rtsp://localhost:8554/test
+      MTX_PATHS_TEST_RUNONINITRESTART: "yes"

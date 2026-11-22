@@ -1,0 +1,24 @@
+{
+  "target": "desktop",
+  "version": "0.3.0",
+  "platform": "linux",
+  "arch": "x64",
+  "python": "3.12.3",
+  "commit": "704a540a9f3289dec4424b29f7c41da46a15f569",
+  "dirty_worktree": true,
+  "tests": "passed",
+  "smoke_test": "passed",
+  "validated": true,
+  "artifact": "dist/artifacts/SafeFlightDesktop-0.3.0-linux-x64.tar.gz",
+  "sha256": "6706e81e4bbbdf37e96387bb145b529b00ae7916b486a9b1ff37167c3bb8084b",
+  "test_summary": {
+    "tests": 78,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1,
+    "passed": 77
+  },
+  "smoke_test_platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "status": "success",
+  "duration_s": 162.1
+}
