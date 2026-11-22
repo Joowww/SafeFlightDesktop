@@ -177,6 +177,16 @@ object DefaultProfiles {
             video = VideoSettings(mode = "rtsp", rtspUrl = SIYI_RTSP_URL, rtspTransport = "tcp"),
         ),
         ConnectionProfile(
+            id = "raspberry-lab",
+            name = "RASPBERRY / CUBE (LAB)",
+            kind = "custom",
+            builtin = true,
+            notes = "Raspberry Pi del laboratorio (172.16.15.85) con Cube Orange en /dev/ttyACM0 a 57600. MAVProxy reenvía MAVLink a este equipo. Verificar la IP del equipo antes de conectar; primera conexión siempre en SOLO MONITORIZACIÓN. En Android: solo monitorización; MAVProxy necesita una salida " +
+                "--out=udpout:<IP_ANDROID>:14550. Vídeo por RTSP (MediaMTX en la Raspberry).",
+            mavlink = MavlinkSettings(transport = "udp_listen", localHost = "0.0.0.0", localPort = 14550),
+            video = VideoSettings(mode = "rtsp", rtspUrl = "rtsp://172.16.15.85:8554/cam", rtspTransport = "tcp"),
+        ),
+        ConnectionProfile(
             id = "sitl",
             name = "SITL / SIMULACIÓN",
             kind = "sitl",

@@ -2,8 +2,10 @@ import math
 from pymavlink import mavutil
 
 class KeyboardController:
-    def __init__(self, vehicle, max_speed=1, max_yaw_rate=15):
+    def __init__(self, vehicle, max_speed=1, max_yaw_rate=15, guard=None):
         self.vehicle = vehicle
+        # CommandGuard: every setpoint needs a permit; without it nothing is sent.
+        self.guard = guard
         self.max_speed = max_speed
         self.speed = max_speed
         self.is_active = False
@@ -17,14 +19,18 @@ class KeyboardController:
         self._setup_yaw_control()
 
     def stop(self):
+        was_active = self.is_active
         self.is_active = False
         self.pressed_keys.clear()
-        self._send_velocity(0, 0, 0, 0)
+        if was_active:
+            self._send_velocity(0, 0, 0, 0)
 
     def set_pressed_keys(self, keys):
         self.pressed_keys = set(keys)
 
     def _send_velocity(self, vx, vy, vz, yaw_rate):
+        if self.guard is not None and not self.guard.request("VELOCITY"):
+            return
         yaw_rate_rad = math.radians(yaw_rate)
         target_system = self.vehicle._master.target_system
         target_comp = self.vehicle._master.target_component
@@ -72,6 +78,8 @@ class KeyboardController:
         self._send_velocity(vx, vy, vz, yaw_rate)
 
     def _setup_yaw_control(self):
+        if self.guard is not None and not self.guard.request("YAW"):
+            return
         target_system = self.vehicle._master.target_system
         target_comp = self.vehicle._master.target_component
         msg = self.vehicle.message_factory.command_long_encode(

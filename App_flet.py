@@ -36,6 +36,7 @@ from PIL import Image, ImageDraw
 from dronekit import VehicleMode
 
 from models.DroneManager import DroneManager
+from models import CommandGuard as cg
 from models.Trajectory import Trajectory
 from models.AppPaths import resource_dir, user_config_dir
 from models.AppLogging import active_log_path, start_session_log
@@ -329,6 +330,8 @@ class SafeFlightApp:
         
         self.takeoff_thread = None
         self.takeoff_stop_event = threading.Event()
+        # Flight state shown by the TAKEOFF button (Flet 0.82 Button has no `text`).
+        self._ui_flying = False
         
         self.connection_thread = None
         self.connection_stop_event = threading.Event()
@@ -555,13 +558,16 @@ class SafeFlightApp:
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
         )
 
+        # Keyboard control sends velocity setpoints: only selectable during an
+        # authorised control session (CommandGuard also blocks it at the link).
+        self.radio_keyboard = ft.Radio(value=DroneManager.CONTROL_KEYBOARD, label="Keyboard", disabled=True)
         self.controlmode_radio = ft.RadioGroup(
             value=DroneManager.CONTROL_TRAJECTORY,
             on_change=self.on_control_mode_change,
             content=ft.Column(
                 spacing=2,
                 controls=[
-                    ft.Radio(value=DroneManager.CONTROL_KEYBOARD, label="Keyboard"),
+                    self.radio_keyboard,
                     ft.Radio(value=DroneManager.CONTROL_TRAJECTORY, label="Trajectory"),
                 ],
             ),
@@ -586,6 +592,21 @@ class SafeFlightApp:
             on_click=self._land_action,
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
         )
+
+        self.btn_rtl = ft.Button(
+            "RTL",
+            disabled=True,
+            bgcolor="#8e44ad",
+            color="white",
+            on_click=self._rtl_action,
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+        )
+        self.control_status_text = ft.Text(
+            "SOLO MONITORIZACIÓN · comandos bloqueados", size=12, color="#f0b429",
+            weight=ft.FontWeight.BOLD,
+        )
+        self.btn_authorize = ft.TextButton("Autorizar control…", on_click=self._open_authorize_dialog, disabled=True)
+        self.btn_revoke = ft.TextButton("Revocar", on_click=self._revoke_session, disabled=True)
 
         self.traj_switch = ft.Switch(
             label="Create trajectory",
@@ -676,9 +697,11 @@ class SafeFlightApp:
                         weight=ft.FontWeight.BOLD,
                         color="gray",
                     ),
+                    self.control_status_text,
+                    ft.Row([self.btn_authorize, self.btn_revoke], spacing=4, wrap=True),
                     self.controlmode_radio,
                     self.btn_takeoff,
-                    self.btn_land,
+                    ft.Row([self.btn_land, self.btn_rtl], spacing=8),
                     ft.Divider(color="#333333"),
                     ft.Text(
                         "TRAJECTORY COMMANDS",
@@ -1029,6 +1052,7 @@ class SafeFlightApp:
             controls=[
                 self.root_content,   # ← solo esto, sin el kb_listener aquí
                 self.profiles_panel.container,
+                self._build_authorize_dialog(),
             ],
         )
 
@@ -1689,11 +1713,12 @@ class SafeFlightApp:
                 vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
                 if vehicle:
                     v_mode = vehicle.mode.name
-                    is_active = vehicle.armed or v_mode in ["GUIDED", "TAKEOFF"]
+                    is_active = bool(vehicle.armed)
 
+                    self._refresh_control_ui(vehicle)
                     if not is_active:
-                        if self.btn_takeoff.disabled:
-                            self.btn_takeoff.disabled = False
+                        if self._ui_flying:
+                            self._set_flying(False)
                             self.speed_slider.disabled = False
                             self.alt_slider.disabled = False
                             self.alt_mode_radio.disabled = False
@@ -1705,10 +1730,10 @@ class SafeFlightApp:
                             self.controlmode_radio.disabled = False
                             self.btn_takeoff.text = "TAKEOFF"
                             self.btn_takeoff.bgcolor = "#3b8ed0"
-                            self.btn_land.disabled = True
                             self.btn_land.text = "LAND"
                     else:
-                        if self.btn_land.disabled and v_mode != "LAND":
+                        if not self._ui_flying and v_mode != "LAND":
+                            self._set_flying(True)
                             self.btn_takeoff.disabled = True
                             self.speed_slider.disabled = True
                             self.alt_slider.disabled = True
@@ -1724,11 +1749,29 @@ class SafeFlightApp:
                             self.traj_switch.disabled = True
                             self.btn_takeoff.text = "FLYING"
                             self.btn_takeoff.bgcolor = "gray"
-                            self.btn_land.disabled = False
                             self.btn_land.text = "LAND"
 
                     self._update_link_status(vehicle)
                     status_text = f"MODE: {vehicle.mode.name}\nARMED: {vehicle.armed}"
+                    # Battery, GPS and identity for the pre-flight checks ("—" = unknown).
+                    try:
+                        batt = vehicle.battery
+                        volt = f"{batt.voltage:.2f} V" if batt and batt.voltage is not None else "—"
+                        level = f"{batt.level} %" if batt and batt.level is not None and batt.level >= 0 else "—"
+                    except Exception:
+                        volt, level = "—", "—"
+                    try:
+                        gps = vehicle.gps_0
+                        fix = gps.fix_type if gps and gps.fix_type is not None else "—"
+                        sats = gps.satellites_visible if gps and gps.satellites_visible is not None else "—"
+                    except Exception:
+                        fix, sats = "—", "—"
+                    ident = self.drone_manager.identity
+                    sysid = ident[0] if ident else "—"
+                    hb = vehicle.last_heartbeat
+                    hb_text = f"{hb:.1f} s" if hb is not None else "—"
+                    status_text += (f"\nBAT: {volt} · {level}\nGPS fix: {fix} · sats: {sats}"
+                                    f"\nSYSID: {sysid} · HB: {hb_text}")
                     self.lbl_status.value = status_text
                     self.lbl_status.color = "#2ecc71" if vehicle.armed else "#e74c3c"
 
@@ -2113,7 +2156,7 @@ class SafeFlightApp:
     async def _apply_connection_success(self):
         self.btn_connect.text = "ONLINE"
         self.btn_connect.bgcolor = "#3498db"
-        self.btn_takeoff.disabled = False
+        self.btn_takeoff.disabled = True  # locked until an operator session is authorised
         self.speed_slider.disabled = False
         self.alt_slider.disabled = False
         self.alt_mode_radio.disabled = False
@@ -2133,11 +2176,8 @@ class SafeFlightApp:
 
     
     def _takeoff_action(self, e=None):
-        if (
-            self.selected_control_mode == DroneManager.CONTROL_TRAJECTORY
-            and (not self.current_trajectory or not self.current_trajectory.points)
-        ):
-            self._show_message("No hay trayectoria cargada para volar en modo trajectory.", error=True)
+        if self.drone_manager.guard.state != cg.AUTHORIZED:
+            self._show_message("TAKEOFF bloqueado: autoriza primero una sesión de control.", error=True)
             return
         if self.takeoff_thread and self.takeoff_thread.is_alive():
             return
@@ -2179,7 +2219,14 @@ class SafeFlightApp:
                 async def apply_result():
                     if self.takeoff_stop_event.is_set() or self.closing:
                         return
-                    if success:
+                    hover_only = (
+                        self.selected_control_mode == DroneManager.CONTROL_TRAJECTORY
+                        and (not self.current_trajectory or not self.current_trajectory.points)
+                    )
+                    if success and hover_only:
+                        self._show_message("Despegue completado: estacionario en GUIDED (sin trayectoria).")
+                        self.btn_takeoff.text = "FLYING"
+                    elif success:
                         try:
                             task = self.drone_manager.start_selected_controller(self.current_trajectory)
                             if task == False:
@@ -2189,7 +2236,6 @@ class SafeFlightApp:
                                 )
                         except Exception as ex:
                             self._show_message(f"Error iniciando control: {ex}", error=True)
-                        self.btn_land.disabled = False
                         self.btn_land.text = "LAND"
                         self.btn_takeoff.text = "FLYING"
                     else:
@@ -2206,7 +2252,7 @@ class SafeFlightApp:
                         self.btn_takeoff.text = "TAKEOFF"
                         self.btn_takeoff.bgcolor = "#3b8ed0"
                         self._show_message(
-                            "El dron no pudo despegar. Revisa GPS y modo GUIDED.",
+                            f"Despegue detenido: {self.drone_manager.last_error or 'sin confirmación'}",
                             error=True,
                         )
                     self._safe_page_update()
@@ -2227,15 +2273,149 @@ class SafeFlightApp:
             return
         if self.takeoff_stop_event:
             self.takeoff_stop_event.set()
-        if self.drone_manager.link and self.drone_manager.link.vehicle:
-            self.btn_land.disabled = True
-            self.btn_land.text = "LANDING..."
+        self._clear_keyboard_state()
+        self._run_flight_command("LAND", self.drone_manager.land)
+
+    def _rtl_action(self, e=None):
+        if self.closing:
+            return
+        if self.takeoff_stop_event:
+            self.takeoff_stop_event.set()
+        self._clear_keyboard_state()
+        self._run_flight_command("RTL", self.drone_manager.return_to_launch)
+
+    def _run_flight_command(self, label, action):
+        """Runs a blocking manager command off the UI thread and reports the result."""
+        def worker():
+            ok = action()
+            if ok:
+                msg = f"{label} confirmado por el autopiloto."
+            else:
+                msg = f"{label} no ejecutado: {self.drone_manager.last_error}"
+            self._safe_run_task(self._async_message, msg, not ok)
+
+        threading.Thread(target=worker, name=f"cmd-{label.lower()}", daemon=True).start()
+
+    async def _async_message(self, message, error=False):
+        self._show_message(message, error=error)
+
+    # ========================================================
+    # CONTROL SESSION (CommandGuard)
+    # ========================================================
+    def _set_flying(self, flying):
+        self._ui_flying = bool(flying)
+        self.btn_takeoff.content = "FLYING" if flying else "TAKEOFF"
+
+    def _refresh_control_ui(self, vehicle=None):
+        guard = self.drone_manager.guard
+        authorized = guard.state == cg.AUTHORIZED
+        emergency = guard.state in (cg.AUTHORIZED, cg.SUSPENDED)
+        self.control_status_text.value = guard.status_text()
+        self.control_status_text.color = {cg.AUTHORIZED: "#fb7185", cg.SUSPENDED: "#e67e22"}.get(
+            guard.state, "#f0b429")
+        connected = bool(self.drone_manager.link and self.drone_manager.link.is_connected)
+        self.btn_authorize.disabled = not connected or authorized
+        self.btn_revoke.disabled = guard.state == cg.MONITOR
+        flying = self._ui_flying
+        busy = bool(self.takeoff_thread and self.takeoff_thread.is_alive())
+        self.btn_takeoff.disabled = not authorized or flying or busy
+        self.btn_land.disabled = not emergency
+        self.btn_rtl.disabled = not emergency
+        self.radio_keyboard.disabled = not authorized
+        if not authorized and self.controlmode_radio.value == DroneManager.CONTROL_KEYBOARD:
+            self.controlmode_radio.value = DroneManager.CONTROL_TRAJECTORY
+            self.drone_manager.select_control_mode(DroneManager.CONTROL_TRAJECTORY)
+            self.selected_control_mode = DroneManager.CONTROL_TRAJECTORY
+
+    def _build_authorize_dialog(self):
+        self.auth_identity_text = ft.Text("", color="white", size=13, selectable=True)
+        self.auth_checks = [
+            ft.Checkbox(label=text, value=False) for text in (
+                "Piloto con mando RC presente y control manual verificado",
+                "Zona despejada; hélices, estructura y batería inspeccionadas",
+                "Comprobaciones pre-arm del autopiloto sin errores",
+                "Failsafes del autopiloto configurados (RC, batería, GCS)",
+                "Autorizo esta sesión de pruebas (caduca a los 20 min)",
+            )
+        ]
+        self.auth_sysid_field = ft.TextField(label="Escribe el SYSID del vehículo", width=260,
+                                             dense=True, bgcolor="#1b1b1b", color="white")
+        self.auth_error_text = ft.Text("", color="#fb7185", size=12)
+        self.auth_dialog = ft.Container(
+            visible=False,
+            expand=True,
+            bgcolor="#000000b0",
+            alignment=ft.Alignment(0, 0),
+            content=ft.Container(
+                width=620,
+                padding=20,
+                border_radius=12,
+                bgcolor="#202020",
+                border=ft.Border.all(1, "#fb7185"),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    scroll=ft.ScrollMode.AUTO,
+                    controls=[
+                        ft.Text("Autorizar sesión de control", size=20, weight=ft.FontWeight.BOLD, color="white"),
+                        ft.Text("Permite enviar comandos de vuelo (ARM, TAKEOFF, LAND, RTL, movimiento) a este "
+                                "vehículo. Las comprobaciones del autopiloto no se omiten.",
+                                color="#aaaaaa", size=12),
+                        self.auth_identity_text,
+                        *self.auth_checks,
+                        self.auth_sysid_field,
+                        self.auth_error_text,
+                        ft.Row(alignment=ft.MainAxisAlignment.END, controls=[
+                            ft.TextButton("Cancelar", on_click=self._close_authorize_dialog),
+                            ft.Button("Autorizar", bgcolor="#c0392b", color="white",
+                                      on_click=self._confirm_authorize),
+                        ]),
+                    ],
+                ),
+            ),
+        )
+        return self.auth_dialog
+
+    def _open_authorize_dialog(self, e=None):
+        snap = self.drone_manager.snapshot()
+        vehicle = self.drone_manager.link.vehicle if self.drone_manager.link else None
+        version = str(getattr(vehicle, "version", "")) if vehicle else ""
+        age = f"{snap.heartbeat_age_s:.1f} s" if snap.heartbeat_age_s is not None else "—"
+        self.auth_identity_text.value = (
+            f"Vehículo: SYSID {snap.system_id} · COMPID {snap.component_id} · "
+            f"tipo MAV {snap.vehicle_type} · {version}\n"
+            f"Modo {snap.mode} · {'ARMADO' if snap.armed else 'desarmado'} · GPS fix {snap.gps_fix} "
+            f"({snap.satellites} sats) · último heartbeat {age}"
+        )
+        for box in self.auth_checks:
+            box.value = False
+        self.auth_sysid_field.value = ""
+        self.auth_error_text.value = ""
+        self._clear_keyboard_state()
+        self.auth_dialog.visible = True
+        self._safe_page_update()
+
+    def _close_authorize_dialog(self, e=None):
+        self.auth_dialog.visible = False
+        self._safe_page_update()
+
+    def _confirm_authorize(self, e=None):
+        decision = self.drone_manager.guard.authorize(
+            [bool(box.value) for box in self.auth_checks], str(self.auth_sysid_field.value or ""))
+        if not decision:
+            self.auth_error_text.value = decision.reason
             self._safe_page_update()
-            self.drone_manager.link.vehicle.mode = VehicleMode("LAND")
-            self.drone_manager.current_mode = "IDLE"
-            self._clear_keyboard_state()
-        if self.takeoff_thread and self.takeoff_thread.is_alive():
-            self.takeoff_thread.join(timeout=2.0)
+            return
+        self.auth_dialog.visible = False
+        self._refresh_control_ui()
+        self._show_message("Sesión de control autorizada. Los comandos se registran en el log.")
+        self._safe_page_update()
+
+    def _revoke_session(self, e=None):
+        self.drone_manager.guard.revoke("Revocada por el operador")
+        self._refresh_control_ui()
+        self._show_message("Sesión de control revocada: solo monitorización.")
+        self._safe_page_update()
            
 
     # ========================================================

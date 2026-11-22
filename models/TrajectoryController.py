@@ -11,8 +11,11 @@ class TrajectoryController:
         altitude_tolerance=0.8,
         resend_interval=0.5,
         speed = 0.5,
+        guard=None,
     ):
         self.vehicle = vehicle
+        # CommandGuard: every position target needs a permit.
+        self.guard = guard
         self.acceptance_radius = acceptance_radius
         self.altitude_tolerance = altitude_tolerance
         self.resend_interval = resend_interval
@@ -107,6 +110,8 @@ class TrajectoryController:
             return
 
         wp = self.trajectory.points[self.current_index]
+        if self.guard is not None and not self.guard.request("POSITION"):
+            return
 
         lat_int = int(wp.x * 1e7)
         lon_int = int(wp.y * 1e7)

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -98,6 +99,28 @@ fun ConnectionScreen(
 
     var form by remember(active) { mutableStateOf(ProfileForm.from(active)) }
     var errors by remember(active) { mutableStateOf<List<String>>(emptyList()) }
+    var confirmReset by remember { mutableStateOf(false) }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("¿Restablecer la configuración?") },
+            text = {
+                Text(
+                    "Se recuperarán los valores predeterminados de este perfil de conexión. " +
+                        "Los cambios guardados en este perfil se perderán.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    viewModel.restoreProfile(active.id)
+                    onRestartVideo()
+                }) { Text("Restablecer") }
+            },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancelar") } },
+        )
+    }
 
     Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         // --- Profile editor ----------------------------------------------------
@@ -163,9 +186,8 @@ fun ConnectionScreen(
                         if (errors.isEmpty()) onRestartVideo()
                     }) { Text("Guardar") }
                     OutlinedButton(onClick = { viewModel.duplicateProfile(active.id) }) { Text("Duplicar") }
-                    if (active.builtin) {
-                        TextButton(onClick = { viewModel.restoreProfile(active.id); onRestartVideo() }) { Text("Restaurar fábrica") }
-                    } else {
+                    TextButton(onClick = { confirmReset = true }) { Text("Restablecer configuración") }
+                    if (!active.builtin) {
                         TextButton(onClick = { viewModel.deleteProfile(active.id)?.let { errors = listOf(it) } }) { Text("Eliminar") }
                     }
                 }

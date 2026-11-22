@@ -34,7 +34,7 @@ class ProfilesTest {
         val store = MemoryStore()
         store.putString(ProfileRepository.KEY, "{ not json")
         val repo = ProfileRepository(store).load()
-        assertEquals(3, repo.document.value.profiles.size)
+        assertEquals(4, repo.document.value.profiles.size)
         assertNotNull(repo.lastWarning)
         assertEquals("{ not json", store.map[ProfileRepository.KEY_CORRUPT_BACKUP])
     }
@@ -66,6 +66,20 @@ class ProfilesTest {
         assertTrue(runCatching { repo.delete("sitl") }.isFailure)
         repo.delete(clone.id)
         assertTrue(repo.document.value.profiles.none { it.id == clone.id })
+    }
+
+    @Test
+    fun resetAffectsOnlyTheSelectedProfile() {
+        val repo = ProfileRepository(MemoryStore()).load()
+        val clone = repo.duplicate("siyi-local")
+        repo.save(clone.copy(name = "Lab", mavlink = clone.mavlink.copy(localPort = 14600)))
+        val sitlBefore = repo.document.value.profiles.first { it.id == "sitl" }
+        val reset = repo.restore(clone.id)
+        assertEquals("Lab", reset.name)
+        assertEquals(14550, reset.mavlink.localPort)
+        assertFalse(reset.builtin)
+        assertEquals(sitlBefore, repo.document.value.profiles.first { it.id == "sitl" })
+        assertEquals(5, repo.document.value.profiles.size)
     }
 
     /** The example file shared with Desktop must be readable on Android. */

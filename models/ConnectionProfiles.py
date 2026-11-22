@@ -344,6 +344,20 @@ def default_profiles() -> List[ConnectionProfile]:
             timeouts=Timeouts(),
         ),
         ConnectionProfile(
+            id="raspberry-lab",
+            name="RASPBERRY / CUBE (LAB)",
+            kind="custom",
+            builtin=True,
+            notes=(
+                "Raspberry Pi del laboratorio (172.16.15.85) con Cube Orange en /dev/ttyACM0 a 57600. MAVProxy reenvía MAVLink a este equipo. Verificar la IP del equipo antes de conectar; primera conexión siempre en SOLO MONITORIZACIÓN. Vídeo: RTP/UDP 5004 desde rpicam-vid; alternativa RTSP "
+                "(MediaMTX en la Raspberry) en rtsp://172.16.15.85:8554/cam."
+            ),
+            mavlink=MavlinkEndpoint(transport="udp_listen", local_host="0.0.0.0", local_port=LEGACY_MAVLINK_PORT),
+            video=VideoSource(mode="rtp_udp", rtp_udp_port=LEGACY_RTP_PORT,
+                              rtsp_url="rtsp://172.16.15.85:8554/cam", rtsp_transport="tcp"),
+            timeouts=Timeouts(),
+        ),
+        ConnectionProfile(
             id="sitl",
             name="SITL / SIMULACIÓN",
             kind="sitl",

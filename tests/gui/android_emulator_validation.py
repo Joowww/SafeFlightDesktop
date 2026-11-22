@@ -54,12 +54,21 @@ class Device:
 
     def nodes(self):
         for _ in range(3):
+            # Remove the previous dump: a failed dump must never return a stale screen.
+            self.shell("rm", "-f", "/sdcard/ui.xml", check=False)
             self.shell("uiautomator", "dump", "/sdcard/ui.xml", check=False)
             raw = self.shell("cat", "/sdcard/ui.xml", check=False)
             if raw.strip().startswith("<?xml"):
                 root = ET.fromstring(raw[raw.index("<"):])
                 nodes = list(root.iter("node"))
                 # System "isn't responding" dialogs (slow emulators) are dismissed with "Wait".
+                if any("keeps stopping" in (n.get("text") or "") for n in nodes):
+                    close = [n for n in nodes if n.get("text") == "Close app"]
+                    if close:
+                        x, y = self.center(close[0])
+                        self.shell("input", "tap", str(x), str(y))
+                        time.sleep(2)
+                        continue
                 if any("isn't responding" in (n.get("text") or "") for n in nodes):
                     wait = [n for n in nodes if n.get("text") == "Wait"]
                     if wait:
@@ -194,14 +203,15 @@ class Device:
         time.sleep(4)
 
 
-def preseed(dev):
+def preseed(dev, video=True):
     """Writes the SITL udp_connect test profile into the debug app preferences."""
     import html
     doc = {"schema_version": 1, "active_profile_id": "sitl", "profiles": [
         {"id": "sitl", "name": "SITL / SIMULACIÓN", "kind": "sitl", "builtin": True,
          "mavlink": {"transport": "udp_connect", "remote_host": "10.0.2.2", "remote_port": 14551,
                      "send_gcs_heartbeat": True},
-         "video": {"mode": "rtsp", "rtsp_url": "rtsp://10.0.2.2:18554/test", "rtsp_transport": "tcp"}}]}
+         "video": {"mode": "rtsp" if video else "none", "rtsp_url": "rtsp://10.0.2.2:18554/test",
+                   "rtsp_transport": "tcp"}}]}
     header = "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>"
     value = html.escape(json.dumps(doc, ensure_ascii=False))
     xml = chr(10).join([header, "<map>", f'    <string name="connection_profiles_json">{value}</string>', "</map>", ""])
@@ -239,6 +249,9 @@ def main() -> int:
     parser.add_argument("--skip-rtsp-outage", action="store_true")
     parser.add_argument("--preseed-profile", action="store_true",
                         help="write the SITL test profile with run-as instead of typing it (slow emulators)")
+    parser.add_argument("--no-video", action="store_true",
+                        help="profile without video: uiautomator cannot dump the UI while video plays on API 28; "
+                             "RTSP on that image is documented with screenshots instead")
     args = parser.parse_args()
     OUT_BASE.mkdir(parents=True, exist_ok=True)
     dev = Device(args.serial)
@@ -265,7 +278,7 @@ def main() -> int:
 
         e = step("A-02", "Editar el perfil SITL desde la interfaz (UDP hacia remoto 10.0.2.2:14551) y guardar")
         if args.preseed_profile:
-            preseed(dev)
+            preseed(dev, video=not args.no_video)
             dev.go("Conexión")
             e.update(result="NOT_RUN", detail="perfil cargado con run-as (--preseed-profile); edición por interfaz no ejercitada")
             print("  NOT_RUN preseeded")
@@ -286,15 +299,20 @@ def main() -> int:
                 failed(e, f"perfil guardado: {m}, activo={doc['active_profile_id']}")
 
         e = step("A-03", "Conectar telemetría desde la pantalla de conexión")
-        dev.tap("Conectar", settle=6)
-        status = dev.wait_text(lambda t: t == "CONECTADO", timeout=30)
+        dev.hide_ime()
+        status = None
+        for _ in range(3):  # a tap can land while the screen is still settling after saving
+            dev.tap("Conectar", settle=6)
+            status = dev.wait_text(lambda t: t == "CONECTADO", timeout=15)
+            if status:
+                break
         e["evidence"].append(dev.screenshot("A-03-conexion.png"))
         passed(e, "estado CONECTADO") if status else failed(e, "sin CONECTADO")
 
         e = step("A-04", "Pantalla de vuelo: telemetría y vídeo RTSP")
         dev.go("Vuelo")
         mode = dev.wait_text(lambda t: t == "MODO LOITER", timeout=20)
-        live = dev.wait_text(lambda t: t == "VÍDEO EN DIRECTO", timeout=60)
+        live = "sin vídeo (--no-video)" if args.no_video else dev.wait_text(lambda t: t == "VÍDEO EN DIRECTO", timeout=60)
         e["evidence"].append(dev.screenshot("A-04-vuelo.png"))
         passed(e, f"'{mode}', '{live}'") if mode and live else failed(e, f"modo={mode}, vídeo={live}")
 
@@ -316,7 +334,7 @@ def main() -> int:
             failed(e, f"banner={lost}, vuelta={back}, log stale/lost/recovered={stale}/{lost_log}/{recovered}")
 
         e = step("A-06", "Caída y vuelta del servidor RTSP: recuperación automática del vídeo")
-        if args.skip_rtsp_outage:
+        if args.skip_rtsp_outage or args.no_video:
             e.update(result="NOT_RUN", detail="omitido por opción")
         else:
             subprocess.run(["docker", "stop", "safeflight-rtsp-test"], capture_output=True)
@@ -329,9 +347,9 @@ def main() -> int:
         e = step("A-07", "Ciclo de vida: HOME libera el decodificador; al volver se reanuda")
         dev.shell("input", "keyevent", "KEYCODE_HOME")
         time.sleep(5)
-        stopped = "Reproducción detenida" in dev.logcat()
+        stopped = args.no_video or "Reproducción detenida" in dev.logcat()
         dev.launch()
-        live = dev.wait_text(lambda t: t == "VÍDEO EN DIRECTO", timeout=60)
+        live = True if args.no_video else dev.wait_text(lambda t: t == "VÍDEO EN DIRECTO", timeout=60)
         hb = dev.wait_text(lambda t: t == "MAVLINK CONECTADO", timeout=20)
         passed(e, "decodificador liberado y reanudado; telemetría continua") if stopped and live and hb \
             else failed(e, f"stopped={stopped}, live={live}, mavlink={hb}")
@@ -363,6 +381,25 @@ def main() -> int:
         e["evidence"].append(dev.screenshot("A-09-arm-bloqueado.png"))
         logged = "ARM rechazado" in dev.logcat()
         passed(e, snack) if snack and logged else failed(e, f"snackbar={snack}, log={logged}")
+
+        e = step("A-11", "Restablecer configuración: Cancelar no cambia nada; Restablecer recupera el perfil de fábrica")
+        dev.go("Conexión")
+        dev.scroll_until("Restablecer configuración", 800, max_swipes=8)
+        dev.tap("Restablecer configuración", settle=2)
+        dialog = dev.wait_text(lambda t: t == "¿Restablecer la configuración?", timeout=10)
+        dev.tap("Cancelar", settle=2)
+        after_cancel = next(p for p in dev.prefs_json()["profiles"] if p["id"] == "sitl")["mavlink"]
+        dev.tap("Restablecer configuración", settle=2)
+        dev.tap("Restablecer", settle=3)
+        doc = dev.prefs_json()
+        after_reset = next(p for p in doc["profiles"] if p["id"] == "sitl")["mavlink"]
+        others = sorted(p["id"] for p in doc["profiles"])
+        ok_reset = (dialog and after_cancel["transport"] == "udp_connect"
+                    and after_reset["transport"] == "udp_listen" and after_reset["local_port"] == 14550
+                    and "siyi-local" in others and "raspberry-lab" in others)
+        e["evidence"].append(dev.screenshot("A-11-restablecer.png"))
+        passed(e, f"diálogo='{dialog}'; tras Cancelar={after_cancel['transport']}; "
+                  f"tras Restablecer={after_reset['transport']}:{after_reset['local_port']}; perfiles={others}")             if ok_reset else failed(e, f"dialog={dialog} cancel={after_cancel} reset={after_reset}")
 
         e = step("A-10", "Pantalla de misiones identifica los datos como demostración")
         dev.go("Misiones")

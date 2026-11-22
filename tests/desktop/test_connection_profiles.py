@@ -25,7 +25,7 @@ def store(tmp_path):
 # -- defaults ------------------------------------------------------------------
 def test_defaults_contain_required_profiles(store):
     ids = [p.id for p in store.profiles]
-    assert ids == ["siyi-local", "cellular-vpn", "sitl"]
+    assert ids == ["siyi-local", "cellular-vpn", "raspberry-lab", "sitl"]
     assert all(p.builtin for p in store.profiles)
     for profile in store.profiles:
         validate_profile(profile)
@@ -63,14 +63,14 @@ def test_file_is_valid_json_with_schema_version(tmp_path, store):
     data = json.loads((tmp_path / "connection_profiles.json").read_text(encoding="utf-8"))
     assert data["schema_version"] == 1
     assert data["active_profile_id"] == "sitl"
-    assert len(data["profiles"]) == 3
+    assert len(data["profiles"]) == 4
 
 
 def test_corrupt_file_is_quarantined_and_defaults_restored(tmp_path):
     path = tmp_path / "connection_profiles.json"
     path.write_text("{ not json", encoding="utf-8")
     s = ProfileStore(config_dir=tmp_path, environ={}).load()
-    assert [p.id for p in s.profiles] == ["siyi-local", "cellular-vpn", "sitl"]
+    assert [p.id for p in s.profiles] == ["siyi-local", "cellular-vpn", "raspberry-lab", "sitl"]
     assert any("ilegibles" in w for w in s.warnings)
     assert list(tmp_path.glob("connection_profiles.json.corrupt-*"))
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
@@ -84,7 +84,7 @@ def test_future_schema_version_is_not_silently_accepted(tmp_path):
 
 
 def test_invalid_profile_is_skipped_and_builtins_restored(tmp_path):
-    good = default_profiles()[2].to_dict()
+    good = next(p for p in default_profiles() if p.id == "sitl").to_dict()
     bad = dict(good, id="broken", builtin=False)
     bad["mavlink"] = dict(good["mavlink"], local_port=80)
     incomplete = {"id": "partial", "name": "Partial", "kind": "custom"}  # defaults fill the rest

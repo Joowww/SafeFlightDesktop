@@ -89,8 +89,15 @@ class ProfileRepository(private val store: KeyValueStore) {
         return clone
     }
 
+    /**
+     * Resets only the profile [id]. Factory profiles get their factory values;
+     * custom profiles keep their id and name and get the application defaults
+     * (they have no original values to return to). Other profiles are untouched.
+     */
     fun restore(id: String): ConnectionProfile {
-        val default = DefaultProfiles.builtin(id) ?: throw IllegalArgumentException("solo perfiles de fábrica")
+        val current = _document.value.profiles.first { it.id == id }
+        val default = DefaultProfiles.builtin(id)
+            ?: ConnectionProfile(id = current.id, name = current.name, kind = "custom", builtin = false)
         _document.value = _document.value.copy(profiles = _document.value.profiles.map { if (it.id == id) default else it })
         persist()
         return default

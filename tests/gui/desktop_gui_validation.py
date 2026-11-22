@@ -286,8 +286,8 @@ def main() -> int:
         gui.invoke("Guardar y seleccionar")
         doc = load_profiles()
         copies = [p for p in doc["profiles"] if p["name"].startswith(PROFILE_NAME) and p["id"] != new_id]
-        if copies and doc["active_profile_id"] == copies[0]["id"] and len(doc["profiles"]) == 5:
-            s.ok(f"copia '{copies[0]['name']}' ({copies[0]['id']}); 5 perfiles en el fichero")
+        if copies and doc["active_profile_id"] == copies[0]["id"] and len(doc["profiles"]) == 6:
+            s.ok(f"copia '{copies[0]['name']}' ({copies[0]['id']}); 6 perfiles en el fichero")
         else:
             s.fail(f"perfiles={[p['id'] for p in doc['profiles']]}, activo={doc['active_profile_id']}")
 

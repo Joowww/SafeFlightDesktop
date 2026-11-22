@@ -74,6 +74,8 @@ class TelemetrySimulator:
         self._thread = threading.Thread(target=self._run, name="mavlink-test-sender", daemon=True)
         self.sent_heartbeats = 0
         self.paused = False
+        # Everything received from the GCS, for negative tests ("TYPE" or "COMMAND_LONG:<id>").
+        self.received = {}
 
     def start(self) -> "TelemetrySimulator":
         self._thread.start()
@@ -109,6 +111,10 @@ class TelemetrySimulator:
             except Exception:
                 continue
             for msg in messages:
+                key = msg.get_type()
+                if key == "COMMAND_LONG":
+                    key = f"COMMAND_LONG:{msg.command}"
+                self.received[key] = self.received.get(key, 0) + 1
                 if msg.get_type() == "PARAM_REQUEST_LIST" and not self.paused:
                     self.mav.param_value_send(b"SIM_TEST_PARAM", 1.0,
                                               mavlink2.MAV_PARAM_TYPE_REAL32, 1, 0)
