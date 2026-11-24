@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Custom XML attribute of TelemetryRowView: app:rowLabel="Altitud rel." -->
+    <declare-styleable name="TelemetryRowView">
+        <attr name="rowLabel" format="string" />
+    </declare-styleable>
+</resources>

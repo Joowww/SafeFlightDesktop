@@ -6,7 +6,7 @@ TFG sobre planificación y ejecución de misiones con IA agéntica.
 | Aplicación | Plataformas | Tecnología | Ubicación |
 |---|---|---|---|
 | **SafeFlight Desktop** | Windows · macOS · Linux | Python, Flet, DroneKit, PyAV | raíz (`App_flet.py`, `models/`, `ui/`) |
-| **SafeFlight Android** | Android 8+ · objetivo SIYI MK32 | Kotlin, Jetpack Compose, Media3 | [`android/`](android/) |
+| **SafeFlight Android** | Android 8+ · objetivo SIYI MK32 | Java, Android Views (XML), Media3 | [`android/`](android/) |
 
 Ambas aplicaciones son independientes y comparten contratos verificados por pruebas
 en [`shared/`](shared/): perfiles de conexión, interpretación de MAVLink y vectores de prueba.

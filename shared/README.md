@@ -1,6 +1,6 @@
 # Contratos compartidos
 
-SafeFlight Desktop (Python) y SafeFlight Android (Kotlin) no comparten código:
+SafeFlight Desktop (Python) y SafeFlight Android (Java) no comparten código:
 comparten **contratos** verificables por pruebas en ambos lenguajes.
 
 | Ruta | Contenido | Consumidores |

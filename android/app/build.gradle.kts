@@ -1,8 +1,7 @@
+// Build configuration (Gradle Kotlin DSL). The application itself is written in
+// Java with XML layouts: there is no Kotlin or Jetpack Compose source code.
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.kotlin.serialization)
 }
 
 // Single version source shared with SafeFlight Desktop (../VERSION).
@@ -41,7 +40,7 @@ android {
     }
 
     buildFeatures {
-        compose = true
+        viewBinding = true
         buildConfig = true
     }
 
@@ -62,29 +61,15 @@ android {
     }
 }
 
-kotlin {
-    // Bytecode target 17; any installed JDK >= 17 can compile it.
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
-}
-
 dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.ui.tooling.preview)
-    implementation(libs.compose.material3)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.lifecycle.viewmodel)
+    implementation(libs.androidx.lifecycle.livedata)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.rtsp)
     implementation(libs.media3.ui)
-    implementation(libs.kotlinx.serialization.json)
-    implementation(libs.kotlinx.coroutines.android)
-    debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
-    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.org.json)
 }

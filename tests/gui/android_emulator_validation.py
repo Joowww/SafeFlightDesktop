@@ -131,11 +131,23 @@ class Device:
             self.shell("input", "keyevent", "KEYCODE_BACK")
             time.sleep(1.5)
 
+    # Java/XML app: TextInputLayout keeps the label outside the EditText, so the
+    # fields are found by resource id (res/layout/fragment_connection.xml).
+    FIELD_IDS = {
+        "Nombre": "edit_name", "Dirección local": "edit_local_host", "Puerto local": "edit_local_port",
+        "IP remota": "edit_remote_host", "Puerto remoto": "edit_remote_port", "URL RTSP": "edit_rtsp_url",
+        "Telemetría obsoleta (s)": "edit_stale", "Vídeo obsoleto (s)": "edit_video_stale",
+        "Reintento vídeo (s)": "edit_video_retry",
+    }
+
     def edit_field(self, label):
-        """EditText whose descendant label text equals ``label``."""
+        """EditText for ``label``: by resource id (Views) or descendant label text (Compose)."""
+        field_id = self.FIELD_IDS.get(label)
         for n in self.nodes():
             if n.get("class") == "android.widget.EditText":
-                if any(c.get("text") == label for c in n.iter("node")):
+                if field_id and (n.get("resource-id") or "").endswith(":id/" + field_id):
+                    return n
+                if n.get("hint") == label or any(c.get("text") == label for c in n.iter("node")):
                     return n
         return None
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Items of the left navigation rail (MainActivity). Add a new screen here. -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_flight"
+        android:icon="@drawable/ic_nav_flight"
+        android:title="@string/nav_flight" />
+    <item
+        android:id="@+id/nav_connection"
+        android:icon="@drawable/ic_nav_connection"
+        android:title="@string/nav_connection" />
+    <item
+        android:id="@+id/nav_missions"
+        android:icon="@drawable/ic_nav_missions"
+        android:title="@string/nav_missions" />
+</menu>

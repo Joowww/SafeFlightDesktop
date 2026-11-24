@@ -1,8 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SafeFlight" parent="android:Theme.Material.NoActionBar">
+    <!-- Material 3 dark theme for Android Views (Material Components library). -->
+    <style name="Theme.SafeFlight" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/sf_accent</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/sf_accent</item>
+        <item name="colorSurface">@color/sf_surface</item>
+        <item name="colorOnSurface">@color/sf_text</item>
+        <item name="colorSurfaceVariant">@color/sf_surface_high</item>
+        <item name="colorOnSurfaceVariant">@color/sf_muted</item>
+        <item name="colorOutline">@color/sf_outline</item>
+        <item name="colorError">@color/sf_danger</item>
+        <item name="android:colorBackground">@color/sf_background</item>
         <item name="android:windowBackground">@color/background</item>
         <item name="android:statusBarColor">@color/background</item>
         <item name="android:navigationBarColor">@color/background</item>
+    </style>
+
+    <!-- Grey upper-case section title ("VUELO", "BATERÍA"...). -->
+    <style name="SafeFlight.SectionTitle" parent="">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:layout_marginBottom">2dp</item>
+        <item name="android:textColor">@color/sf_muted</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- Rounded panel with border. -->
+    <style name="SafeFlight.Panel" parent="">
+        <item name="android:background">@drawable/bg_panel</item>
+        <item name="android:padding">12dp</item>
+    </style>
+
+    <!-- Small grey helper text. -->
+    <style name="SafeFlight.Hint" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/sf_muted</item>
+        <item name="android:textSize">11sp</item>
     </style>
 </resources>

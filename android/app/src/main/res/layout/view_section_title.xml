@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Section title created from Java (same look as style SafeFlight.SectionTitle). -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    style="@style/SafeFlight.SectionTitle" />

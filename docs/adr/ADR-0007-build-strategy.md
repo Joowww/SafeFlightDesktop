@@ -18,8 +18,9 @@ mantener procedimientos distintos.
 ## Decisión
 `build.py` (solo biblioteca estándar) para todos los objetivos; GitHub Actions ejecuta
 el mismo comando en una matriz Windows / Linux / macOS arm64 / macOS x64 y en Ubuntu
-para Android. Versiones Android: AGP 8.13.2 y Gradle 8.14 (última línea 8.x), Kotlin
-2.3.21, Compose BOM 2026.06.01, Media3 1.10.1.
+para Android. Versiones Android: AGP 8.13.2 y Gradle 8.14 (última línea 8.x), Java 17,
+Material Components 1.13.0, AppCompat 1.7.1, Media3 1.10.1 (antes Kotlin 2.3.21 y Compose BOM
+2026.06.01; ver ADR-0010).
 
 ## Justificación
 * Python ya es requisito de Desktop: no se añade herramienta nueva.

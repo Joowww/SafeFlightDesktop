@@ -1,15 +1,18 @@
 # Arquitectura de SafeFlight Android
 
+> Migrada a Java + XML (ADR-0010). Las secciones siguientes describen los mismos componentes;
+> la correspondencia de archivos y nombres está en [android-java.md](../development/android-java.md).
+
 ## 1. Resumen
 
 | Aspecto | Decisión | Justificación |
 |---|---|---|
-| Lenguaje / UI | Kotlin 2.3 + Jetpack Compose (Material 3) | [ADR-0002](../adr/ADR-0002-android-kotlin-compose.md) |
-| Patrón | MVVM: `MainViewModel` + `StateFlow`; contenedor manual de dependencias | Sin framework DI para un MVP de un módulo |
+| Lenguaje / UI | Java 17 + Android Views (XML, ViewBinding, Material 3) | [ADR-0010](../adr/ADR-0010-android-java-views.md) (sustituye a ADR-0002); guía: [android-java.md](../development/android-java.md) |
+| Patrón | MVVM: `MainViewModel` + `LiveData`; contenedor manual de dependencias (`AppContainer`) | Sin framework DI para un MVP de un módulo |
 | Módulos Gradle | Uno (`:app`), separación por paquetes | Varios módulos no aportan beneficio aún |
 | MAVLink | Analizador propio (subconjunto de telemetría) | [ADR-0004](../adr/ADR-0004-mavlink-telemetry.md) |
 | Vídeo | Media3 ExoPlayer + `media3-exoplayer-rtsp` | RTSP/H.264 con baja latencia, mantenido por Google |
-| Persistencia | `SharedPreferences` con JSON (`kotlinx.serialization`) | Mismo esquema que Desktop |
+| Persistencia | `SharedPreferences` con JSON (`org.json`, `ProfileJson`) | Mismo esquema que Desktop |
 | SDK | `minSdk 26`, `targetSdk 35`, `compileSdk 36` | MK32 usa Android 9 (API 28) |
 | Orientación | Horizontal (`sensorLandscape`) | Pantalla del MK32 |
 | Build | AGP 8.13.2, Gradle 8.14, JDK ≥ 17 | [ADR-0007](../adr/ADR-0007-build-strategy.md) |

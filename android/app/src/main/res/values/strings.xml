@@ -1,4 +1,82 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SafeFlight</string>
+
+    <!-- Navigation -->
+    <string name="nav_flight">Vuelo</string>
+    <string name="nav_connection">Conexión</string>
+    <string name="nav_missions">Misiones</string>
+
+    <!-- Flight screen -->
+    <string name="section_flight">VUELO</string>
+    <string name="section_battery">BATERÍA</string>
+    <string name="section_gps">GPS</string>
+    <string name="section_messages">MENSAJES DEL AUTOPILOTO</string>
+    <string name="section_controls">CONTROLES (BLOQUEADOS)</string>
+    <string name="row_rel_alt">Altitud rel.</string>
+    <string name="row_msl_alt">Altitud MSL</string>
+    <string name="row_ground_speed">Vel. suelo</string>
+    <string name="row_climb">Vel. vertical</string>
+    <string name="row_heading">Rumbo</string>
+    <string name="row_voltage">Tensión</string>
+    <string name="row_current">Corriente</string>
+    <string name="row_remaining">Restante</string>
+    <string name="row_fix">Fix</string>
+    <string name="row_satellites">Satélites</string>
+    <string name="row_hdop">HDOP</string>
+    <string name="row_lat">Latitud</string>
+    <string name="row_lon">Longitud</string>
+    <string name="controls_note">Comandos de vuelo deshabilitados hasta completar validación SITL, análisis de seguridad y autorización. El RC del mando sigue siendo el control del vehículo.</string>
+
+    <!-- Connection screen -->
+    <string name="section_active_profile">PERFIL ACTIVO</string>
+    <string name="section_mavlink">TELEMETRÍA MAVLINK</string>
+    <string name="section_video">VÍDEO</string>
+    <string name="section_supervision">SUPERVISIÓN</string>
+    <string name="section_telemetry">TELEMETRÍA</string>
+    <string name="section_log">REGISTRO</string>
+    <string name="field_name">Nombre</string>
+    <string name="field_local_host">Dirección local</string>
+    <string name="field_local_port">Puerto local</string>
+    <string name="field_remote_host">IP remota</string>
+    <string name="field_remote_port">Puerto remoto</string>
+    <string name="field_rtsp_url">URL RTSP</string>
+    <string name="field_stale">Telemetría obsoleta (s)</string>
+    <string name="field_video_stale">Vídeo obsoleto (s)</string>
+    <string name="field_video_retry">Reintento vídeo (s)</string>
+    <string name="chip_udp_listen">UDP escucha</string>
+    <string name="chip_udp_connect">UDP hacia remoto</string>
+    <string name="chip_rtsp">RTSP</string>
+    <string name="chip_no_video">Sin vídeo</string>
+    <string name="chip_tcp">TCP</string>
+    <string name="chip_udp">UDP</string>
+    <string name="gcs_heartbeat_note">Enviar heartbeat de GCS (1 Hz). Si FS_GCS_ENABLE está activo en ArduPilot, dejar de enviarlo puede activar el failsafe de GCS.</string>
+    <string name="verbose_logging">Registro detallado</string>
+    <string name="button_save">Guardar</string>
+    <string name="button_duplicate">Duplicar</string>
+    <string name="button_reset">Restablecer configuración</string>
+    <string name="button_delete">Eliminar</string>
+    <string name="button_connect">Conectar</string>
+    <string name="button_disconnect">Desconectar</string>
+    <string name="button_restart_video">Reiniciar vídeo</string>
+    <string name="button_stop_video">Detener vídeo</string>
+    <string name="row_endpoint">Endpoint</string>
+    <string name="row_last_heartbeat">Último heartbeat</string>
+    <string name="row_datagrams">Datagramas</string>
+    <string name="row_frames">Tramas válidas / descartadas</string>
+    <string name="row_gcs_sent">Heartbeats GCS enviados</string>
+    <string name="row_socket_retries">Reintentos socket</string>
+    <string name="row_url">URL</string>
+    <string name="row_resolution">Resolución</string>
+    <string name="row_frame_age">Edad último fotograma</string>
+    <string name="row_frames_rendered">Fotogramas</string>
+    <string name="row_video_retries">Reintentos</string>
+    <string name="reset_title">¿Restablecer la configuración?</string>
+    <string name="reset_message">Se recuperarán los valores predeterminados de este perfil de conexión. Los cambios guardados en este perfil se perderán.</string>
+    <string name="reset_confirm">Restablecer</string>
+    <string name="cancel">Cancelar</string>
+    <string name="numeric_fields_error">Revisa los campos numéricos</string>
+
+    <!-- Missions screen -->
+    <string name="missions_demo_banner">DATOS DE DEMOSTRACIÓN — no existe todavía conexión con el supervisor de misiones (Hermes). Ninguna misión mostrada es real.</string>
 </resources>

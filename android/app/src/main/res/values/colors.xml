@@ -3,4 +3,20 @@
     <color name="background">#FF0E1116</color>
     <color name="launcher_background">#FF0E1116</color>
     <color name="launcher_foreground">#FF3B8ED0</color>
+
+    <!-- SafeFlight palette (same values as the Kotlin/Compose version). -->
+    <color name="sf_background">#FF0E1116</color>
+    <color name="sf_surface">#FF171B22</color>
+    <color name="sf_surface_high">#FF212733</color>
+    <color name="sf_outline">#FF323A48</color>
+    <color name="sf_text">#FFE8ECF2</color>
+    <color name="sf_muted">#FF8C96A8</color>
+    <color name="sf_accent">#FF3B8ED0</color>
+    <color name="sf_ok">#FF4ADE80</color>
+    <color name="sf_ok_button">#CC4ADE80</color>
+    <color name="sf_warn">#FFF0B429</color>
+    <color name="sf_danger">#FFFB7185</color>
+    <color name="sf_locked">#FF5B6373</color>
+    <color name="sf_chip_background">#CC0E1116</color>
+    <color name="sf_on_banner">#FF000000</color>
 </resources>

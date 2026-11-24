@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Missions screen (MissionsFragment.java). Shows DEMO data only: there is no
+  connection with the mission supervisor (Hermes) yet.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/demo_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_banner"
+        android:padding="10dp"
+        android:text="@string/missions_demo_banner"
+        android:textColor="@color/sf_on_banner"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="10dp">
+
+        <!-- Section titles (status) and mission cards, added from Java. -->
+        <LinearLayout
+            android:id="@+id/missions_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+</LinearLayout>

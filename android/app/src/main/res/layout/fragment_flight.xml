@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Flight screen (FlightFragment.java): live video with status chips on the
+  left, telemetry panel and the (blocked) controls on the right.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:baselineAligned="false"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="8dp">
+
+    <!-- ===== Main video ===== -->
+    <FrameLayout
+        android:id="@+id/video_frame"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginEnd="8dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_video">
+
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/player_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:resize_mode="fit"
+            app:shutter_background_color="@android:color/black"
+            app:use_controller="false" />
+
+        <!-- Shown while the video is not playing (VÍDEO SIN SEÑAL...). -->
+        <TextView
+            android:id="@+id/video_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:padding="24dp"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:layout_margin="8dp"
+            android:orientation="vertical">
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_mavlink"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" />
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_video"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:gravity="end"
+            android:orientation="vertical">
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_armed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp" />
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_mode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <!-- PÉRDIDA DE TELEMETRÍA / TELEMETRÍA OBSOLETA banner. -->
+        <TextView
+            android:id="@+id/link_banner"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_margin="10dp"
+            android:background="@drawable/bg_banner"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="6dp"
+            android:textColor="@color/sf_on_banner"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- ===== Telemetry panel ===== -->
+    <ScrollView
+        android:id="@+id/telemetry_scroll"
+        style="@style/SafeFlight.Panel"
+        android:layout_width="270dp"
+        android:layout_height="match_parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_flight" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_rel_alt" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_rel_alt" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_msl_alt" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_msl_alt" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_ground_speed" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_ground_speed" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_climb" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_climb" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_heading" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_heading" />
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_battery" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_voltage" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_voltage" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_current" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_current" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_remaining" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_remaining" />
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_gps" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_fix" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_fix" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_satellites" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_satellites" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_hdop" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_hdop" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_lat" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_lat" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_lon" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_lon" />
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_messages" />
+            <!-- Filled from Java with the last 6 STATUSTEXT messages. -->
+            <LinearLayout
+                android:id="@+id/messages_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_controls" />
+            <!-- One locked button per FlightCommand, created from Java. -->
+            <LinearLayout
+                android:id="@+id/controls_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                style="@style/SafeFlight.Hint"
+                android:layout_marginTop="4dp"
+                android:text="@string/controls_note"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

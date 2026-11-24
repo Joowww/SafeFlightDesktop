@@ -76,7 +76,7 @@ radiocontrol, fuera del alcance de SafeFlight.*
 2. **Configuración separada del código.** IP, puertos y fuentes de vídeo viven en
    perfiles editables ([ADR-0005](../adr/ADR-0005-connection-profiles.md)).
 3. **Aplicaciones independientes, contratos compartidos.** Desktop (Python) y
-   Android (Kotlin) comparten esquemas, contrato MAVLink y vectores de prueba,
+   Android (Java) comparten esquemas, contrato MAVLink y vectores de prueba,
    no código ([ADR-0001](../adr/ADR-0001-monorepo-structure.md)).
 4. **Vídeo y telemetría separados.** Dos canales con diagnóstico independiente
    ([ADR-0006](../adr/ADR-0006-video-telemetry-separation.md)).

@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Connection screen (ConnectionFragment.java): profile editor on the left,
+  telemetry/video diagnostics and log on the right.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:baselineAligned="false"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="8dp">
+
+    <!-- ===================== Profile editor ===================== -->
+    <ScrollView
+        android:id="@+id/editor_scroll"
+        style="@style/SafeFlight.Panel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginEnd="8dp"
+        android:layout_weight="1.1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_active_profile" />
+
+            <!-- One chip per profile, created from Java. Wraps to new lines so that
+                 every profile stays visible on narrow screens. -->
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/profile_chips"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:selectionRequired="true"
+                app:singleSelection="true" />
+
+            <TextView
+                android:id="@+id/profile_notes"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginVertical="4dp"
+                android:textColor="@color/sf_warn"
+                android:textSize="12sp" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/field_name">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/edit_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="text|textNoSuggestions"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_mavlink" />
+
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/transport_chips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_udp_listen"
+                    style="@style/Widget.Material3.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/chip_udp_listen" />
+
+                <com.google.android.material.chip.Chip
+                    android:id="@+id/chip_udp_connect"
+                    style="@style/Widget.Material3.Chip.Filter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/chip_udp_connect" />
+            </com.google.android.material.chip.ChipGroup>
+
+            <!-- udp_listen: local address and port. -->
+            <LinearLayout
+                android:baselineAligned="false"
+                android:id="@+id/listen_fields"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:hint="@string/field_local_host">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_local_host"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textUri|textNoSuggestions"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/field_local_port">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_local_port"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+
+            <!-- udp_connect: remote address and port. -->
+            <LinearLayout
+                android:baselineAligned="false"
+                android:id="@+id/connect_fields"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:hint="@string/field_remote_host">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_remote_host"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textUri|textNoSuggestions"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/field_remote_port">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_remote_port"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switch_gcs_heartbeat"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="@string/gcs_heartbeat_note" />
+
+                <TextView
+                    style="@style/SafeFlight.Hint"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/gcs_heartbeat_note" />
+            </LinearLayout>
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_video" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.chip.ChipGroup
+                    android:id="@+id/video_mode_chips"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chip_rtsp"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/chip_rtsp" />
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chip_no_video"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/chip_no_video" />
+                </com.google.android.material.chip.ChipGroup>
+
+                <com.google.android.material.chip.ChipGroup
+                    android:id="@+id/rtsp_transport_chips"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chip_tcp"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/chip_tcp" />
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chip_udp"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/chip_udp" />
+                </com.google.android.material.chip.ChipGroup>
+            </LinearLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/field_rtsp_url">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/edit_rtsp_url"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textUri|textNoSuggestions"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_supervision" />
+
+            <LinearLayout
+                android:baselineAligned="false"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:hint="@string/field_stale">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_stale"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="numberDecimal"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:hint="@string/field_video_stale">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_video_stale"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="numberDecimal"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/field_video_retry">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/edit_video_retry"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="numberDecimal"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switch_verbose"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:contentDescription="@string/verbose_logging" />
+
+                <TextView
+                    style="@style/SafeFlight.Hint"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/verbose_logging"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- Validation errors returned by ProfileValidator. -->
+            <TextView
+                android:id="@+id/form_errors"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/sf_danger"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/button_save"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/button_save" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_duplicate"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:text="@string/button_duplicate" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_reset"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/button_reset" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_delete"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/button_delete" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ===================== Diagnostics ===================== -->
+    <ScrollView
+        android:id="@+id/diagnostics_scroll"
+        style="@style/SafeFlight.Panel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_telemetry" />
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_link"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp" />
+
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_endpoint" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_endpoint" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_last_heartbeat" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_last_heartbeat" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_datagrams" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_datagrams" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_frames" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_frames" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_gcs_sent" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_gcs_sent" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_socket_retries" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_socket_retries" />
+
+            <TextView
+                android:id="@+id/link_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/sf_danger"
+                android:textSize="11sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_connect"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:backgroundTint="@color/sf_ok_button"
+                    android:text="@string/button_connect" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_disconnect"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/button_disconnect" />
+            </LinearLayout>
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_video" />
+
+            <org.safeflight.android.ui.widget.StatusChipView
+                android:id="@+id/chip_video_state"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp" />
+
+            <androidx.media3.ui.PlayerView
+                android:id="@+id/preview_player_view"
+                android:layout_width="match_parent"
+                android:layout_height="150dp"
+                android:background="@android:color/black"
+                app:resize_mode="fit"
+                app:shutter_background_color="@android:color/black"
+                app:use_controller="false" />
+
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_url" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_url" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_resolution" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_resolution" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_frame_age" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_frame_age" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_frames_rendered" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_frames_rendered" />
+            <org.safeflight.android.ui.widget.TelemetryRowView android:id="@+id/row_video_retries" android:layout_width="match_parent" android:layout_height="wrap_content" app:rowLabel="@string/row_video_retries" />
+
+            <TextView
+                android:id="@+id/video_error"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/sf_danger"
+                android:textSize="11sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_restart_video"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="6dp"
+                    android:text="@string/button_restart_video" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/button_stop_video"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/button_stop_video" />
+            </LinearLayout>
+
+            <TextView style="@style/SafeFlight.SectionTitle" android:text="@string/section_log" />
+
+            <!-- Last 40 log lines (newest first), coloured by level. -->
+            <TextView
+                android:id="@+id/log_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textColor="@color/sf_muted"
+                android:textIsSelectable="true"
+                android:textSize="11sp"
+                tools:text="12:00:00 App: SafeFlight iniciado" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
