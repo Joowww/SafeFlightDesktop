@@ -11,9 +11,12 @@ import android.view.ViewGroup;
 import android.widget.EditText;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.Lifecycle;
+import androidx.media3.common.util.UnstableApi;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.google.android.material.chip.Chip;
@@ -81,8 +84,13 @@ public final class ConnectionFragment extends Fragment {
 
         setUpListeners();
 
-        video.onSurfaceAttached();
-        video.getPlayer().observe(getViewLifecycleOwner(), p -> binding.previewPlayerView.setPlayer(p));
+        // One observer per source; while the screen is hidden they skip redrawing
+        // (see onHiddenChanged). Unsaved form edits are kept meanwhile.
+        video.getPlayer().observe(getViewLifecycleOwner(), p -> {
+            if (videoAttached) {
+                binding.previewPlayerView.setPlayer(p);
+            }
+        });
         viewModel.getProfiles().observe(getViewLifecycleOwner(), this::renderProfiles);
         viewModel.getLink().observe(getViewLifecycleOwner(), l -> renderTelemetry());
         viewModel.getCounters().observe(getViewLifecycleOwner(), c -> renderTelemetry());
@@ -90,10 +98,82 @@ public final class ConnectionFragment extends Fragment {
         viewModel.getLogEntries().observe(getViewLifecycleOwner(), this::renderLog);
     }
 
+    // ------------------------------------------------- visibility and video
+    // The screen keeps its views while another screen is shown (MainActivity.showScreen),
+    // but releases the video preview and stops redrawing until it is visible again.
+    private boolean videoAttached = false;
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        if (!isHidden()) {
+            attachVideo();
+        }
+    }
+
+    @Override
+    public void onStop() {
+        detachVideo();
+        super.onStop();
+    }
+
+    @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (hidden) {
+            // Released after the destination screen is drawn (see VideoController.releaseAfterNextFrame);
+            // skipped if this screen is shown again before that.
+            video.releaseAfterNextFrame(() -> {
+                if (isHidden()) {
+                    detachVideo();
+                }
+            });
+        } else if (getViewLifecycleOwner().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+            attachVideo();
+            // Show the latest values at once.
+            renderProfiles(viewModel.getProfiles().getValue());
+            renderTelemetry();
+            renderVideo(video.currentState());
+            renderLog(viewModel.getLogEntries().getValue());
+        }
+    }
+
+    private void attachVideo() {
+        video.flushPendingRelease(); // another screen's surface is released before this one is used
+        if (videoAttached || binding == null) {
+            return;
+        }
+        videoAttached = true;
+        video.onSurfaceAttached();
+        setSurfaceVisible(true);
+        binding.previewPlayerView.setPlayer(video.getPlayer().getValue());
+    }
+
+    private void detachVideo() {
+        if (!videoAttached || binding == null) {
+            return;
+        }
+        videoAttached = false;
+        binding.previewPlayerView.setPlayer(null);
+        setSurfaceVisible(false);
+        video.onSurfaceDetached();
+    }
+
+    /**
+     * On Android 9 a SurfaceView keeps showing its last frame when only its parent is
+     * hidden, so the video surface itself is hidden while this screen is not visible.
+     */
+    @OptIn(markerClass = UnstableApi.class)
+    private void setSurfaceVisible(boolean visible) {
+        View surface = binding.previewPlayerView.getVideoSurfaceView();
+        if (surface != null) {
+            surface.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+    }
+
     @Override
     public void onDestroyView() {
-        binding.previewPlayerView.setPlayer(null);
-        video.onSurfaceDetached();
+        detachVideo();
         binding = null;
         boundProfile = null;
         chipsDocument = null;
@@ -183,7 +263,7 @@ public final class ConnectionFragment extends Fragment {
 
     // -------------------------------------------------------------- profiles
     private void renderProfiles(ProfilesDocument doc) {
-        if (binding == null || doc == null || doc.profiles.isEmpty()) {
+        if (binding == null || isHidden() || doc == null || doc.profiles.isEmpty()) {
             return;
         }
         if (doc != chipsDocument) {
@@ -278,7 +358,7 @@ public final class ConnectionFragment extends Fragment {
 
     // ----------------------------------------------------------- diagnostics
     private void renderTelemetry() {
-        if (binding == null) {
+        if (binding == null || isHidden()) {
             return;
         }
         LinkState link = viewModel.getLink().getValue();
@@ -300,7 +380,7 @@ public final class ConnectionFragment extends Fragment {
     }
 
     private void renderVideo(VideoState v) {
-        if (binding == null || v == null) {
+        if (binding == null || isHidden() || v == null) {
             return;
         }
         binding.chipVideoState.bind(UiFormat.videoLabel(v.status), UiFormat.videoColor(v.status), null);
@@ -314,7 +394,7 @@ public final class ConnectionFragment extends Fragment {
     }
 
     private void renderLog(List<LogEntry> entries) {
-        if (binding == null || entries == null) {
+        if (binding == null || isHidden() || entries == null) {
             return;
         }
         SpannableStringBuilder sb = new SpannableStringBuilder();

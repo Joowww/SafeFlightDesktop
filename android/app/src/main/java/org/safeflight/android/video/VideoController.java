@@ -89,6 +89,32 @@ public final class VideoController {
         attachedSurfaces = Math.max(0, attachedSurfaces - 1);
     }
 
+    // ------------------------------------------------ deferred surface release
+    // Releasing a video surface blocks the main thread while ExoPlayer moves the
+    // decoder off it (~65-140 ms measured on the API 28 emulator). When a screen is
+    // hidden, the release is postponed until the next frame has been drawn, so the
+    // destination screen appears first. If another screen needs the video earlier,
+    // it runs the pending release itself (flushPendingRelease) before attaching.
+    private Runnable pendingRelease;
+
+    /** Runs {@code release} after the next frame is drawn, unless flushed earlier. */
+    public void releaseAfterNextFrame(Runnable release) {
+        flushPendingRelease();
+        pendingRelease = release;
+        android.view.Choreographer.getInstance().postFrameCallback(frameTimeNanos ->
+                // Frame callbacks run before the frame is drawn; posting from here runs after it.
+                handler.post(this::flushPendingRelease));
+    }
+
+    /** Runs a pending release now (no-op when there is none). */
+    public void flushPendingRelease() {
+        Runnable release = pendingRelease;
+        pendingRelease = null;
+        if (release != null) {
+            release.run();
+        }
+    }
+
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {

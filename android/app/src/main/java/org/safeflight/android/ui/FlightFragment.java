@@ -9,9 +9,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.Lifecycle;
+import androidx.media3.common.util.UnstableApi;
 import androidx.lifecycle.ViewModelProvider;
 
 import com.google.android.material.button.MaterialButton;
@@ -60,20 +63,91 @@ public final class FlightFragment extends Fragment {
 
         createControlButtons();
 
-        // The PlayerView shows whatever player instance is current.
-        video.onSurfaceAttached();
-        video.getPlayer().observe(getViewLifecycleOwner(), player -> binding.playerView.setPlayer(player));
+        // The PlayerView shows the current player instance while this screen holds the video.
+        video.getPlayer().observe(getViewLifecycleOwner(), player -> {
+            if (videoAttached) {
+                binding.playerView.setPlayer(player);
+            }
+        });
 
-        // Any change of telemetry, link or video redraws the screen.
+        // Any change of telemetry, link or video redraws the screen (skipped while hidden).
         viewModel.getTelemetry().observe(getViewLifecycleOwner(), t -> render());
         viewModel.getLink().observe(getViewLifecycleOwner(), l -> render());
         video.getState().observe(getViewLifecycleOwner(), v -> render());
     }
 
+    // ------------------------------------------------- visibility and video
+    // The screen keeps its views while another screen is shown (MainActivity.showScreen),
+    // but releases the video and stops redrawing until it is visible again.
+    private boolean videoAttached = false;
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        if (!isHidden()) {
+            attachVideo();
+        }
+    }
+
+    @Override
+    public void onStop() {
+        detachVideo();
+        super.onStop();
+    }
+
+    @Override
+    public void onHiddenChanged(boolean hidden) {
+        super.onHiddenChanged(hidden);
+        if (hidden) {
+            // Released after the destination screen is drawn (see VideoController.releaseAfterNextFrame);
+            // skipped if this screen is shown again before that.
+            video.releaseAfterNextFrame(() -> {
+                if (isHidden()) {
+                    detachVideo();
+                }
+            });
+        } else if (getViewLifecycleOwner().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED)) {
+            attachVideo();
+            render(); // show the latest values at once
+        }
+    }
+
+    private void attachVideo() {
+        video.flushPendingRelease(); // another screen's surface is released before this one is used
+        if (videoAttached || binding == null) {
+            return;
+        }
+        videoAttached = true;
+        video.onSurfaceAttached();
+        setSurfaceVisible(true);
+        binding.playerView.setPlayer(video.getPlayer().getValue());
+    }
+
+    private void detachVideo() {
+        if (!videoAttached || binding == null) {
+            return;
+        }
+        videoAttached = false;
+        binding.playerView.setPlayer(null);
+        setSurfaceVisible(false);
+        video.onSurfaceDetached();
+    }
+
+    /**
+     * On Android 9 a SurfaceView keeps showing its last frame when only its parent is
+     * hidden, so the video surface itself is hidden while this screen is not visible.
+     */
+    @OptIn(markerClass = UnstableApi.class)
+    private void setSurfaceVisible(boolean visible) {
+        View surface = binding.playerView.getVideoSurfaceView();
+        if (surface != null) {
+            surface.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+    }
+
     @Override
     public void onDestroyView() {
-        binding.playerView.setPlayer(null);
-        video.onSurfaceDetached();
+        detachVideo();
         binding = null;
         messagesRendered = false;
         super.onDestroyView();
@@ -114,8 +188,8 @@ public final class FlightFragment extends Fragment {
     }
 
     private void render() {
-        if (binding == null) {
-            return;
+        if (binding == null || isHidden()) {
+            return; // hidden screens do not redraw; onHiddenChanged(false) renders on return
         }
         TelemetryState t = viewModel.getTelemetry().getValue();
         LinkState link = viewModel.getLink().getValue();
